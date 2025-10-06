@@ -18,12 +18,8 @@ SCOPES = [
 ]
 SOURCE_FOLDER_ID = '14h9shWD28VqgcCKluwbwnGuHpB0f5ZdT'  # Your pending bills folder
 
-# Database setup
-# Prefer environment variable; fall back to LIVE database URL
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql://postgres:AR%22%28M%28NB%28Qe%5B%22c9J@136.112.86.19:5432/postgres"
-)
+# Database setup (reverted to local for development clones)
+DATABASE_URL = "postgresql://bill_user:ayush23854@localhost/bill_processor_db"
 database = databases.Database(DATABASE_URL)
 metadata = sqlalchemy.MetaData()
 
@@ -241,10 +237,7 @@ async def check_duplicate_by_invoice_reference(service_drive, pdf_data, filename
             
             if invoice_reference:
                 # Check database for existing bill with same reference number
-                database = databases.Database(os.getenv(
-                    "DATABASE_URL",
-                    "postgresql://postgres:AR%22%28M%28NB%28Qe%5B%22c9J@136.112.86.19:5432/postgres"
-                ))
+                database = databases.Database("postgresql://bill_user:ayush23854@localhost/bill_processor_db")
                 await database.connect()
                 
                 try:
