@@ -1,0 +1,1480 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Bill Processing Dashboard</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; 
+            margin: 0; 
+            color: #0f1e3a; 
+            background: 
+                url('/static/background_dashboard.jpeg') center/cover no-repeat,
+                radial-gradient(70vmax 70vmax at -10% -10%, rgba(233,239,255,0.85) 0%, rgba(233,239,255,0.0) 60%),
+                radial-gradient(60vmax 60vmax at 110% 0%, rgba(217,230,255,0.9) 0%, rgba(217,230,255,0.0) 60%),
+                radial-gradient(40vmax 40vmax at 80% 120%, rgba(242,248,255,0.9) 0%, rgba(242,248,255,0) 55%),
+                linear-gradient(135deg, #eef3ff 0%, #f9fbff 45%, #edf2fe 100%);
+            background-attachment: fixed;
+            position: relative;
+        }
+        
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: url('/static/background_dashboard.jpeg') center/cover no-repeat;
+            filter: blur(3px);
+            z-index: -1;
+        }
+        .main-container { max-width: 1200px; margin: 40px auto; padding: 20px; }
+        h1 { text-align: center; color: #0f1e3a; margin-bottom: 30px; font-weight: 700; letter-spacing: 0.2px; }
+        .card { background: #ffffff; padding: 25px; border-radius: 10px; box-shadow: 0 8px 20px rgba(31,59,115,0.08); border: 1px solid #e6ecf7; }
+        .status-table { width: 100%; border-collapse: collapse; margin-top: 20px; table-layout: fixed; background: #fff; border: 1px solid #e8eef8; border-radius: 8px; overflow: hidden; }
+        .status-table th, .status-table td { border-bottom: 1px solid #eef3ff; padding: 12px 15px; text-align: left; vertical-align: middle; }
+        
+        /* Filename column truncation */
+        .filename-cell {
+            max-width: 200px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            position: relative;
+        }
+        
+        .filename-cell:hover {
+            overflow: visible;
+        }
+        
+        .filename-cell .tooltip {
+            visibility: hidden;
+            background-color: #0f1e3a;
+            color: #fff;
+            text-align: left;
+            padding: 8px 12px;
+            border-radius: 6px;
+            position: absolute;
+            z-index: 1000;
+            bottom: 125%;
+            left: 0;
+            white-space: normal;
+            word-wrap: break-word;
+            max-width: 300px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+        }
+        
+        .filename-cell:hover .tooltip {
+            visibility: visible;
+        }
+        .status-table th { font-weight: 600; color: #1f3b73; background-color: #f0f3fa; }
+        
+        /* Filter row styles */
+        .filter-row th { padding: 8px 15px; background-color: #f7f9fd; }
+        .filter-input { 
+            width: 100%; 
+            padding: 6px 8px; 
+            border: 1px solid #d6e0f5; 
+            border-radius: 4px; 
+            font-size: 12px; 
+            background-color: #fff;
+            transition: border-color 0.2s;
+        }
+        .filter-input:focus { 
+            outline: none; 
+            border-color: #2e5aa3; 
+            box-shadow: 0 0 0 2px rgba(46,90,163,0.18);
+        }
+        
+        /* Sortable header styles */
+        .sortable { 
+            cursor: pointer; 
+            user-select: none;
+            position: relative;
+            transition: background-color 0.2s;
+        }
+        .sortable:hover { 
+            background-color: #eef3ff; 
+        }
+        .sort-indicator { 
+            font-size: 12px; 
+            color: #1f3b73; 
+            margin-left: 5px;
+            transition: color 0.2s;
+        }
+        .sortable.sort-asc .sort-indicator { 
+            color: #2e5aa3; 
+        }
+        .sortable.sort-desc .sort-indicator { 
+            color: #2e5aa3; 
+        }
+        .sortable.sort-asc .sort-indicator::after { 
+            content: " ↑"; 
+        }
+        .sortable.sort-desc .sort-indicator::after { 
+            content: " ↓"; 
+        }
+        
+        /* Processing notification banner */
+        .processing-banner {
+            position: fixed;
+            top: 60px;
+            right: 20px;
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+            color: white;
+            padding: 12px 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+            z-index: 999;
+            display: none;
+            animation: slideIn 0.3s ease;
+            font-size: 14px;
+            font-weight: 500;
+            transition: background 0.3s ease;
+        }
+        .processing-banner.show {
+            display: block;
+        }
+        .processing-banner.success {
+            background: linear-gradient(135deg, #059669 0%, #047857 100%);
+            animation: successPulse 0.5s ease;
+        }
+        @keyframes successPulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+        }
+        @keyframes slideIn {
+            from { transform: translateX(400px); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+        .processing-banner .spinner {
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            border: 2px solid rgba(255,255,255,0.3);
+            border-top-color: white;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin-right: 8px;
+            vertical-align: middle;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        /* New bill highlight animation */
+        .new-bill-row {
+            animation: highlightNew 2s ease;
+        }
+        @keyframes highlightNew {
+            0% { background-color: #10b981; transform: scale(1.02); }
+            50% { background-color: #d1fae5; }
+            100% { background-color: transparent; transform: scale(1); }
+        }
+        
+        /* Dropdown filter styles */
+        .dropdown-filter {
+            position: relative;
+            width: 100%;
+        }
+        .dropdown-trigger {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 6px 8px;
+            border: 1px solid #d6e0f5;
+            border-radius: 4px;
+            background-color: #fff;
+            cursor: pointer;
+            transition: border-color 0.2s;
+        }
+        .dropdown-trigger:hover {
+            border-color: #2e5aa3;
+        }
+        .dropdown-text {
+            font-size: 12px;
+            color: #0f1e3a;
+            flex: 1;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .dropdown-arrow {
+            font-size: 10px;
+            color: #1f3b73;
+            margin-left: 5px;
+            transition: transform 0.2s;
+        }
+        .dropdown-filter.active .dropdown-arrow {
+            transform: rotate(180deg);
+        }
+        .dropdown-menu {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            background: #fff;
+            border: 1px solid #d6e0f5;
+            border-radius: 4px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            z-index: 1000;
+            max-height: 200px;
+            overflow: hidden;
+            display: none;
+        }
+        .dropdown-filter.active .dropdown-menu {
+            display: block;
+        }
+        .dropdown-search {
+            padding: 8px;
+            border-bottom: 1px solid #eef3ff;
+        }
+        .dropdown-search-input {
+            width: 100%;
+            padding: 4px 8px;
+            border: 1px solid #d6e0f5;
+            border-radius: 3px;
+            font-size: 11px;
+        }
+        .dropdown-options {
+            max-height: 120px;
+            overflow-y: auto;
+        }
+        .dropdown-option {
+            display: flex;
+            align-items: center;
+            padding: 6px 12px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: background-color 0.2s;
+        }
+        .dropdown-option:hover {
+            background-color: #eef3ff;
+        }
+        .dropdown-option.selected {
+            background-color: #e6eefc;
+        }
+        .dropdown-option input[type="checkbox"] {
+            margin-right: 8px;
+        }
+        .dropdown-actions {
+            padding: 8px;
+            border-top: 1px solid #eef3ff;
+            display: flex;
+            gap: 5px;
+        }
+        .dropdown-actions button {
+            padding: 4px 8px;
+            border: 1px solid #d6e0f5;
+            border-radius: 3px;
+            background: #fff;
+            font-size: 11px;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        .dropdown-actions button:hover {
+            background-color: #f5f7fe;
+        }
+        
+        /* Make rows clickable with hover effect */
+        .status-table tbody tr {
+            cursor: pointer;
+            transition: background-color 0.2s ease;
+        }
+        .status-table tbody tr:hover {
+            background-color: #f7f9ff;
+        }
+        
+        .button-primary { background-color: #2e5aa3; color: white; padding: 8px 16px; font-size: 14px; font-weight: 600; border-radius: 6px; cursor: pointer; border: 1px solid transparent; }
+        .button-primary:hover { background-color: #1f3b73; }
+        .button-secondary { background-color: #ffffff; color: #1f2a44; padding: 8px 16px; font-size: 14px; font-weight: 500; border-radius: 6px; cursor: pointer; border: 1px solid #d6e0f5; }
+        .button-secondary:disabled { cursor: not-allowed; opacity: 0.5; }
+        
+        /* Mode toggle button styles */
+        .button-mode { 
+            background-color: #10b981; 
+            color: white; 
+            padding: 8px 16px; 
+            font-size: 14px; 
+            font-weight: 500; 
+            border-radius: 5px; 
+            cursor: pointer; 
+            border: 1px solid transparent;
+            transition: background-color 0.2s;
+        }
+        .button-mode:hover { 
+            background-color: #059669; 
+        }
+        .button-mode.objectify-active { 
+            background-color: #dc2626; 
+        }
+        .button-mode.objectify-active:hover { 
+            background-color: #b91c1c; 
+        }
+        
+        .status-button { display: inline-block; padding: 6px 12px; border-radius: 16px; font-size: 13px; font-weight: 500; text-align: center; transition: transform 0.2s; border: none; cursor: pointer; pointer-events: none; /* Disable direct click on button since row handles it */ }
+        .status-pending { background-color: #fff6db; color: #8a5800; border: 1px solid #ffe7a6; }
+        .status-approved { background-color: #e7fbf1; color: #065f46; border: 1px solid #bff3d9; }
+        .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 12, 32, 0.6); display: flex; justify-content: center; align-items: center; z-index: 1000; visibility: hidden; opacity: 0; transition: opacity 0.3s ease, visibility 0.3s ease; }
+        .modal-overlay.visible { visibility: visible; opacity: 1; }
+        .modal-content { background-color: #f7f8fc; width: 90%; height: 90%; max-width: 1400px; max-height: 800px; border-radius: 10px; box-shadow: 0 14px 40px rgba(15,30,58,0.25); overflow: hidden; transform: translateY(-50px); transition: transform 0.3s ease; }
+        .modal-overlay.visible .modal-content { transform: translateY(0); }
+        .close-button { background: none; border: none; font-size: 32px; font-weight: bold; color: #ffffff; cursor: pointer; padding: 0 10px; line-height: 1; transition: opacity 0.2s ease; }
+        .close-button:hover { opacity: 0.8; }
+        .modal-content .container { display: flex; height: 100%; }
+        .modal-content .right-panel { width: 100%; }
+        .modal-content .right-panel.with-email { flex: 0.8; margin-right: 10px; }
+        .email-panel { 
+            flex: 0.2; 
+            background: #1f3b73;
+            border-radius: 12px; 
+            padding: 20px; 
+            overflow-y: auto; 
+            border: 1px solid #4a6fa5; 
+            display: none;
+            box-shadow: 0 8px 25px rgba(31,59,115,0.12), 0 2px 8px rgba(31,59,115,0.06);
+            position: relative;
+            backdrop-filter: blur(10px);
+        }
+        .email-panel::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, #1f3b73, #4a6fa5, #1f3b73);
+            border-radius: 12px 12px 0 0;
+        }
+        .email-header { 
+            margin-bottom: 12px; 
+            background-color: #1f3b73; 
+            color: #ffffff; 
+            padding: 10px 12px; 
+            border-radius: 8px; 
+            position: relative;
+        }
+        .email-header::after { display: none; }
+        .email-header h3 { 
+            margin: 0; 
+            color: #ffffff; 
+            font-size: 15px; 
+            font-weight: 700; 
+            letter-spacing: 0.3px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .email-header h3::before {
+            content: '📧';
+            font-size: 16px;
+        }
+        .email-content { 
+            font-size: 13px; 
+            line-height: 1.6; 
+            color: #ffffff; 
+            white-space: pre-wrap; 
+            word-wrap: break-word; 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background: #0b1220;
+            padding: 16px;
+            border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.15);
+            box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
+            position: relative;
+        }
+        .email-content::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, rgba(31,59,115,0.1), transparent);
+        }
+        .email-panel::-webkit-scrollbar {
+            width: 6px;
+        }
+        .email-panel::-webkit-scrollbar-track {
+            background: rgba(255,255,255,0.1);
+            border-radius: 3px;
+        }
+        .email-panel::-webkit-scrollbar-thumb {
+            background: linear-gradient(180deg, #4a6fa5, #6b8cc7);
+            border-radius: 3px;
+        }
+        .email-panel::-webkit-scrollbar-thumb:hover {
+            background: linear-gradient(180deg, #6b8cc7, #8ba3d3);
+        }
+        .modal-content .top-bar { display: flex; justify-content: space-between; align-items: center; background-color: #1f3b73; color: #ffffff; }
+        .right-panel { display: flex; flex-direction: column; max-height: 100vh; }
+        .top-bar { padding: 10px 20px; border-bottom: 1px solid rgba(255,255,255,0.12); flex-shrink: 0; }
+        .bill-viewer { flex-grow: 1; padding: 10px; background-color: #e8ecf7; position: relative; min-height: 0; }
+        #billFrame { width: 100%; height: 100%; border: none; }
+        .data-table-container { height: 40%; flex-shrink: 0; padding: 10px; overflow-y: auto; background-color: #fff; border-top: 1px solid #e6ecf7; }
+        .table-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+        .table-header h3 { margin: 0; }
+        .action-buttons { display: flex; gap: 10px; }
+        
+        /* Mode indicator */
+        .mode-indicator {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-left: 10px;
+            color: white;
+        }
+        .mode-indicator.total-mode { background-color: #2e5aa3; }
+        .mode-indicator.objectify-mode { background-color: #dc2626; }
+        
+        td[contenteditable="true"] { cursor: cell; background-color: #fefefe; }
+        td[contenteditable="true"]:hover, td[contenteditable="true"]:focus { background-color: #dbeafe; outline: 2px solid #2563eb; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; position: sticky; top: 0; }
+    </style>
+</head>
+<body>
+    <img src="/static/credentia_logo.png" alt="Logo" style="position:fixed; top:12px; left:12px; height:36px; width:auto; z-index:100; background: #eef3ff; border-radius: 8px; padding: 6px;">
+    
+    <!-- Company Names and Logout -->
+    <div style="position:fixed; top:12px; right:12px; display:flex; align-items:center; gap:12px; z-index:100;">
+        {% if company_names %}
+        <div style="background:#3b82f6; color:white; padding:8px 16px; border-radius:6px; font-weight:500; font-size:14px;">
+            {{ company_names | join(', ') }}
+        </div>
+        {% endif %}
+        <button onclick="logout()" style="background:#dc2626; color:white; border:none; padding:10px 20px; border-radius:6px; cursor:pointer; font-weight:500; box-shadow:0 2px 8px rgba(220,38,38,0.3); transition: background 0.2s;">
+            Logout
+        </button>
+    </div>
+    
+    <!-- Processing notification banner -->
+    <div id="processingBanner" class="processing-banner">
+        <span class="spinner"></span>
+        <span id="processingText">Processing new bills...</span>
+    </div>
+    
+    <script>
+        // Define a robust global handler early so inline onclick never fails
+        window.openPreview = function(index){
+            // If the full implementation has loaded, delegate to it
+            if (typeof window.openPreviewReady === 'function') {
+                return window.openPreviewReady(index);
+            }
+            // Minimal fallback using server-rendered row datasets
+            try {
+                const rows = document.querySelectorAll('#billList tr');
+                const row = rows[index];
+                if (!row) return;
+                const modal = document.getElementById('previewModal');
+                const billNameH3 = document.getElementById('billName');
+                const billFrame = document.getElementById('billFrame');
+                const dataTable = document.getElementById('dataTable');
+                const populateDataTable = (data) => {
+                    const tableHead = dataTable.querySelector('thead');
+                    const tableBody = dataTable.querySelector('tbody');
+                    tableHead.innerHTML = ''; tableBody.innerHTML = '';
+                    if (!data || data.length === 0 || data.error) {
+                        tableBody.innerHTML = `<tr><td colspan="100%">${data ? (data[0].Error || 'No data extracted.') : 'No data.'}</td></tr>`;
+                        return;
+                    }
+                    const headers = Object.keys(data[0]);
+                    let headerRow = '<tr>';
+                    headers.forEach(h => headerRow += `<th>${h.replace(/_/g, ' ')}</th>`);
+                    headerRow += '</tr>';
+                    tableHead.innerHTML = headerRow;
+                    data.forEach(rowData => {
+                        let rowHtml = '<tr>';
+                        headers.forEach(h => {
+                            const val = rowData[h] !== undefined && rowData[h] !== null ? rowData[h] : '';
+                            rowHtml += `<td contenteditable="true">${val}</td>`;
+                        });
+                        rowHtml += '</tr>';
+                        tableBody.insertAdjacentHTML('beforeend', rowHtml);
+                    });
+                };
+                billNameH3.textContent = row.dataset.filename || 'Bill';
+                if (row.dataset.webview) {
+                    billFrame.src = row.dataset.webview.replace('/view','/preview');
+                }
+                modal.classList.add('visible');
+                populateDataTable([{ "Status": "Extracting data, please wait..." }]);
+                fetch('/get-extracted-data', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ file_id: row.dataset.fileId })
+                }).then(r => r.json()).then(d => {
+                    populateDataTable(d);
+                }).catch(() => {
+                    const fb = [{ "supplier_name": row.dataset.supplier, "file_name": row.dataset.filename, "upload_date": row.dataset.uploadDate, "invoice_date": row.dataset.invoiceDate, "gross_amount": row.dataset.gross }];
+                    populateDataTable(fb);
+                });
+            } catch (e) {
+                try { console.error('Fallback openPreview error:', e); } catch(_e){}
+            }
+        };
+    </script>
+    <div class="main-container">
+        <div style="display:flex; justify-content:center; align-items:center; margin-bottom:10px;">
+            <h1 style="margin:0;">Bill Processing Dashboard</h1>
+        </div>
+        <div class="card">
+            <h2>Pending Bills</h2>
+            <div style="display:flex; gap:10px; align-items:center; margin-top:10px;">
+                <input id="uploadSupplier" type="text" placeholder="Supplier (optional)" class="filter-input" style="max-width:220px;">
+                <input id="uploadFile" type="file" accept="application/pdf" multiple>
+                <button id="uploadBtn" class="button-primary">Upload PDF</button>
+                <span id="uploadMsg" style="font-size:12px; color:#555;"></span>
+            </div>
+            <table class="status-table">
+                <thead>
+                    <tr>
+                        <th class="sortable" data-column="0" data-sort="none">
+                            Supplier Name <span class="sort-indicator">↕</span>
+                        </th>
+                        <th class="sortable" data-column="1" data-sort="none">
+                            Invoice Date <span class="sort-indicator">↕</span>
+                        </th>
+                        <th class="sortable" data-column="2" data-sort="none">
+                            Upload Date <span class="sort-indicator">↕</span>
+                        </th>
+                        <th class="sortable" data-column="3" data-sort="none">
+                            File Name <span class="sort-indicator">↕</span>
+                        </th>
+                        <th class="sortable" data-column="4" data-sort="none">
+                            Gross Amount <span class="sort-indicator">↕</span>
+                        </th>
+                        <th class="sortable" data-column="5" data-sort="none">
+                            Status / Action <span class="sort-indicator">↕</span>
+                        </th>
+                    </tr>
+                    <tr class="filter-row">
+                        <th>
+                            <div class="dropdown-filter" data-column="0">
+                                <div class="dropdown-trigger">
+                                    <span class="dropdown-text">All Suppliers</span>
+                                    <span class="dropdown-arrow">▼</span>
+                                </div>
+                                <div class="dropdown-menu">
+                                    <div class="dropdown-search">
+                                        <input type="text" class="dropdown-search-input" placeholder="Search suppliers...">
+                                    </div>
+                                    <div class="dropdown-options"></div>
+                                    <div class="dropdown-actions">
+                                        <button class="dropdown-select-all">Select All</button>
+                                        <button class="dropdown-clear">Clear</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </th>
+                        <th><input type="text" class="filter-input" placeholder="Filter date..." data-column="1"></th>
+                        <th><input type="text" class="filter-input" placeholder="Filter upload..." data-column="2"></th>
+                        <th><input type="text" class="filter-input" placeholder="Filter filename..." data-column="3"></th>
+                        <th><input type="text" class="filter-input" placeholder="Filter amount..." data-column="4"></th>
+                        <th><input type="text" class="filter-input" placeholder="Filter status..." data-column="5"></th>
+                    </tr>
+                </thead>
+                <tbody id="billList">
+                    {% for bill in bills %}
+                    <tr onclick="openPreview({{ loop.index0 }})" data-file-id="{{ bill.id }}" data-filename="{{ bill.filename }}" data-supplier="{{ bill.supplier_name }}" data-invoice-date="{{ bill.invoice_date if bill.invoice_date }}" data-upload-date="{{ bill.upload_date.split('T')[0] }}" data-gross="{{ bill.gross_amount }}" data-webview="{{ bill.webViewLink }}">
+                        <td>{{ bill.supplier_name }}</td>
+                        <td>{{ bill.invoice_date if bill.invoice_date }}</td>
+                        <td>{{ bill.upload_date.split('T')[0] }}</td>
+                        <td class="filename-cell">
+                            <span>{{ bill.filename }}</span>
+                            <span class="tooltip">{{ bill.filename }}</span>
+                        </td>
+                        <td>£{{ bill.gross_amount }}</td>
+                        <td>
+                            <button class="status-button {{ 'status-approved' if bill.status == 'Approved' else 'status-pending' }}">
+                                {{ bill.status }}
+                            </button>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="6">No pending bills found.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div id="previewModal" class="modal-overlay" onclick="handleOverlayClick(event)">
+        <div class="modal-content" onclick="event.stopPropagation()">
+            <div class="container">
+                <div class="right-panel">
+                    <div class="top-bar">
+                        <h3 id="billName">Loading Bill...</h3>
+                        <button class="close-button" onclick="closePreview()" title="Close">✕</button>
+                    </div>
+                    <div class="bill-viewer">
+                        <iframe id="billFrame" src=""></iframe>
+                    </div>
+                    <div class="data-table-container">
+                         <div class="table-header">
+                            <h3>
+                                Extracted Data
+                                <span id="modeIndicator" class="mode-indicator total-mode">Consolidate</span>
+                            </h3>
+                            <div class="action-buttons">
+                                <button id="objectifyBtn" class="button-mode">Itemize</button>
+                                <button id="prevBtn" class="button-secondary">Previous</button>
+                                <button id="approveBtn" class="button-primary">Approve & Next</button>
+                            </div>
+                        </div>
+                        <table id="dataTable">
+                           <thead></thead>
+                           <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="email-panel" id="emailPanel" style="display: none;">
+                    <div class="email-header">
+                        <h3>Email Text</h3>
+                    </div>
+                    <div class="email-content" id="emailContent">
+                        <!-- Email text will be populated here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        const ALL_BILLS = {{ bills|tojson|safe }};
+    </script>
+    <script>
+        // --- GLOBAL STATE ---
+        let allBills = ALL_BILLS || [];
+        let currentFileIndex = -1;
+        let dataHasChanged = false;
+        let isObjectifyMode = false;
+        let totalModeData = null; // Store original total mode data
+        let objectifyModeData = null; // Store objectified data
+        const totalDataCache = {}; // Cache per bill.id for Total mode
+        let lastProcessedCount = 0; // Track how many files have been processed
+
+        // --- DOM ELEMENTS ---
+        const modal = document.getElementById('previewModal');
+        const billNameH3 = document.getElementById('billName');
+        const billFrame = document.getElementById('billFrame');
+        const dataTable = document.getElementById('dataTable');
+        const approveBtn = document.getElementById('approveBtn');
+        const prevBtn = document.getElementById('prevBtn');
+        const objectifyBtn = document.getElementById('objectifyBtn');
+        const modeIndicator = document.getElementById('modeIndicator');
+        const uploadBtn = document.getElementById('uploadBtn');
+        const uploadFile = document.getElementById('uploadFile');
+        const uploadSupplier = document.getElementById('uploadSupplier');
+        const uploadMsg = document.getElementById('uploadMsg');
+
+        // --- REAL-TIME BILL UPDATES ---
+        async function fetchAndUpdateBills() {
+            try {
+                const response = await fetch('/get-all-pending-bills');
+                const allPendingBills = await response.json();
+                
+                console.log(`[DEBUG] Fetched ${allPendingBills.length} pending bills from database`);
+                console.log(`[DEBUG] Current dashboard has ${allBills.length} bills`);
+                
+                if (!allPendingBills || allPendingBills.length === 0) return;
+                
+                // Get current bill IDs
+                const currentIds = new Set(allBills.map(b => b.id));
+                console.log(`[DEBUG] Current IDs:`, Array.from(currentIds));
+                
+                // Find truly new bills
+                const newBills = allPendingBills.filter(b => !currentIds.has(b.id));
+                
+                if (newBills.length > 0) {
+                    console.log(`✅ Adding ${newBills.length} new bill(s) to dashboard in real-time`);
+                    console.log(`[DEBUG] New bill IDs:`, newBills.map(b => b.id));
+                    
+                    // Add new bills to the beginning
+                    allBills = newBills.concat(allBills);
+                    
+                    // Re-render table with highlight for new bills
+                    renderTable(true);
+                    
+                    // Update originalRows for filtering
+                    const tableBody = document.getElementById('billList');
+                    originalRows = Array.from(tableBody.querySelectorAll('tr'));
+                } else {
+                    console.log(`[DEBUG] No new bills found (all ${allPendingBills.length} already in dashboard)`);
+                }
+                
+            } catch (error) {
+                console.error('Error fetching bills:', error);
+            }
+        }
+        
+        // --- AUTO-REFRESH FOR BACKGROUND PROCESSING ---
+        async function checkBackgroundProcessing() {
+            try {
+                const response = await fetch('/processing-status');
+                const status = await response.json();
+                
+                const banner = document.getElementById('processingBanner');
+                const bannerText = document.getElementById('processingText');
+                
+                if (status.is_processing) {
+                    console.log(`🔄 Processing: ${status.processed_count}/${status.new_files_count} - ${status.current_file || 'Checking...'}`);
+                    
+                    // Show processing banner
+                    banner.classList.add('show');
+                    bannerText.textContent = `Processing bills: ${status.processed_count}/${status.new_files_count} - ${status.current_file || 'Scanning...'}`;
+                    
+                    // Update page title to show progress
+                    document.title = `[${status.processed_count}/${status.new_files_count}] Processing Bills...`;
+                    
+                    // Fetch and add newly processed bills in real-time
+                    await fetchAndUpdateBills();
+                    
+                } else {
+                    // Not processing anymore
+                    if (status.new_files_count > 0 && status.processed_count > lastProcessedCount) {
+                        // Final check for any remaining bills
+                        console.log('✅ Processing complete! Checking for final bills...');
+                        await fetchAndUpdateBills();
+                        
+                        // Show success message with count for 4 seconds
+                        banner.classList.add('success');
+                        bannerText.textContent = `✅ ${status.new_files_count} new file${status.new_files_count > 1 ? 's' : ''} scanned successfully!`;
+                        
+                        // Hide banner after 4 seconds
+                        setTimeout(() => {
+                            banner.classList.remove('show');
+                            banner.classList.remove('success');
+                        }, 4000);
+                    } else {
+                        // Hide banner
+                        banner.classList.remove('show');
+                        banner.classList.remove('success');
+                    }
+                    
+                    // Reset title
+                    document.title = 'Bill Processing Dashboard';
+                }
+                
+                lastProcessedCount = status.processed_count;
+            } catch (error) {
+                console.error('Error checking processing status:', error);
+            }
+        }
+        
+        // Check every 3 seconds for new bills (more frequent for real-time feel)
+        setInterval(checkBackgroundProcessing, 3000);
+        
+        // --- EVENT LISTENERS ---
+        window.onload = function() {
+            renderTable();
+            prevBtn.addEventListener('click', () => displayBillInModal(currentFileIndex - 1));
+            approveBtn.addEventListener('click', approveAndGoToNext);
+            objectifyBtn.addEventListener('click', toggleObjectifyMode);
+            
+            // Start checking for background processing immediately
+            checkBackgroundProcessing();
+            
+            // Listen for any edits in the data table
+            dataTable.addEventListener('input', () => {
+                dataHasChanged = true;
+                const bill = allBills[currentFileIndex];
+                if (bill && bill.status === 'Approved') {
+                    approveBtn.disabled = false;
+                    approveBtn.textContent = 'Update & Next';
+                }
+            });
+            
+            // Add Escape key listener to close modal
+            document.addEventListener('keydown', function(event) {
+                if (event.key === 'Escape' && modal.classList.contains('visible')) {
+                    closePreview();
+                }
+            });
+
+            // Upload handler (isolated, does not change existing event handlers)
+            if (uploadBtn) {
+                uploadBtn.addEventListener('click', async () => {
+                    const files = uploadFile.files ? Array.from(uploadFile.files) : [];
+                    if (!files.length) { uploadMsg.textContent = 'Select one or more PDFs first.'; return; }
+                    uploadBtn.disabled = true; uploadMsg.textContent = `Uploading 0/${files.length}...`;
+                    const sup = (uploadSupplier.value || '').trim();
+                    const newlyAdded = [];
+                    try {
+                        for (let i = 0; i < files.length; i++) {
+                            const f = files[i];
+                            const form = new FormData();
+                            form.append('file', f);
+                            if (sup) form.append('supplier', sup);
+                            const resp = await fetch('/upload-bill', { method: 'POST', body: form });
+                            if (!resp.ok) throw new Error('Upload failed');
+                            const bill = await resp.json();
+                            newlyAdded.push(bill);
+                            uploadMsg.textContent = `Uploading ${i+1}/${files.length}...`;
+                        }
+                        // Prepend all new bills and re-render once
+                        allBills = newlyAdded.concat(allBills);
+                        renderTable();
+                        uploadMsg.textContent = `Uploaded & extracted ${newlyAdded.length} file(s).`;
+                        uploadFile.value = '';
+                    } catch (e) {
+                        uploadMsg.textContent = 'Upload failed.';
+                    } finally {
+                        uploadBtn.disabled = false;
+                    }
+                });
+            }
+        };
+
+        // --- CORE FUNCTIONS ---
+        function handleOverlayClick(event) {
+            // Close modal when clicking on the overlay (dark background)
+            if (event.target.id === 'previewModal') {
+                closePreview();
+            }
+        }
+
+        function renderTable(highlightNew = false) {
+            // If no data available from JS, keep server-rendered rows intact
+            if (!allBills || allBills.length === 0) return;
+            const tableBody = document.getElementById('billList');
+            
+            // Get existing row IDs to detect which are new
+            const existingIds = new Set(
+                Array.from(tableBody.querySelectorAll('tr')).map(row => row.dataset.fileId)
+            );
+            
+            tableBody.innerHTML = '';
+            allBills.forEach((bill, index) => {
+                const row = document.createElement('tr');
+                // Add onclick to the row
+                row.onclick = () => openPreview(index);
+                row.style.cursor = 'pointer';
+                row.dataset.fileId = bill.id;
+                row.dataset.filename = bill.filename;
+                row.dataset.supplier = bill.supplier_name || bill.supplier || '';
+                row.dataset.invoiceDate = bill.invoice_date || '';
+                row.dataset.uploadDate = (bill.upload_date || '').split('T')[0];
+                row.dataset.gross = bill.gross_amount || bill.amount || '';
+                row.dataset.webview = bill.webViewLink || '';
+                
+                // Highlight if this is a newly added bill
+                if (highlightNew && !existingIds.has(bill.id)) {
+                    row.classList.add('new-bill-row');
+                }
+                
+                const statusHtml = `<button class="status-button ${bill.status === 'Approved' ? 'status-approved' : 'status-pending'}">${bill.status}</button>`;
+                row.innerHTML = `
+                    <td>${bill.supplier_name || bill.supplier}</td>
+                    <td>${bill.invoice_date}</td>
+                    <td>${(bill.upload_date || '').split('T')[0]}</td>
+                    <td class="filename-cell">
+                        <span>${bill.filename}</span>
+                        <span class="tooltip">${bill.filename}</span>
+                    </td>
+                    <td>${bill.gross_amount ? '£' + bill.gross_amount : bill.amount}</td>
+                    <td>${statusHtml}</td>
+                `;
+                tableBody.appendChild(row);
+            });
+        }
+
+        function openPreview(index) {
+            try { console.log('openPreview called with index:', index); } catch (_e) {}
+            // Reset mode to Total when opening a new bill
+            isObjectifyMode = false;
+            totalModeData = null;
+            objectifyModeData = null;
+            updateModeUI();
+            
+            try {
+                displayBillInModal(index);
+            } catch (e) {
+                // Fallback: use row dataset if allBills is missing or index mismatch
+                const rows = document.querySelectorAll('#billList tr');
+                const row = rows[index];
+                if (!row) return;
+                currentFileIndex = index;
+                billNameH3.textContent = row.dataset.filename || 'Bill';
+                if (row.dataset.webview) {
+                    billFrame.src = row.dataset.webview.replace('/view','/preview');
+                }
+                modal.classList.add('visible');
+                populateDataTable([{ "Status": "Extracting data, please wait..." }]);
+                fetch('/get-extracted-data', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ file_id: row.dataset.fileId })
+                }).then(r => r.json()).then(d => {
+                    totalModeData = d; populateDataTable(d);
+                }).catch(() => {
+                    const fb = [{ "supplier_name": row.dataset.supplier, "file_name": row.dataset.filename, "upload_date": row.dataset.uploadDate, "invoice_date": row.dataset.invoiceDate, "gross_amount": row.dataset.gross }];
+                    totalModeData = fb; populateDataTable(fb);
+                });
+                return;
+            }
+            modal.classList.add('visible');
+        }
+        // Ensure global availability for inline onclick and signal readiness
+        window.openPreview = openPreview;
+        window.openPreviewReady = openPreview;
+
+        // Global error logger to surface hidden JS errors that may block modal
+        window.addEventListener('error', function(e) {
+            try { console.error('JS Error:', e.message, e.filename, e.lineno); } catch (_e) {}
+        });
+
+        function closePreview() {
+            modal.classList.remove('visible');
+            // Reset mode when closing
+            isObjectifyMode = false;
+            totalModeData = null;
+            objectifyModeData = null;
+        }
+
+        function toggleObjectifyMode() {
+            isObjectifyMode = !isObjectifyMode;
+            updateModeUI();
+            
+            if (isObjectifyMode) {
+                // Switch to Objectify mode
+                if (objectifyModeData) {
+                    populateDataTable(objectifyModeData);
+                } else {
+                    // Request objectified data from server
+                    fetchObjectifiedData();
+                }
+            } else {
+                // Switch back to Total mode
+                if (totalModeData) {
+                    populateDataTable(totalModeData);
+                }
+            }
+        }
+
+        function updateModeUI() {
+            if (isObjectifyMode) {
+                objectifyBtn.textContent = 'Consolidate';
+                objectifyBtn.classList.add('objectify-active');
+                modeIndicator.textContent = 'Itemize';
+                modeIndicator.classList.remove('total-mode');
+                modeIndicator.classList.add('objectify-mode');
+            } else {
+                objectifyBtn.textContent = 'Itemize';
+                objectifyBtn.classList.remove('objectify-active');
+                modeIndicator.textContent = 'Consolidate';
+                modeIndicator.classList.remove('objectify-mode');
+                modeIndicator.classList.add('total-mode');
+            }
+        }
+
+        async function fetchObjectifiedData() {
+            const bill = allBills[currentFileIndex];
+            if (!bill) return;
+            
+            populateDataTable([{"Status": "Itemizing data, please wait..."}]);
+            
+            try {
+                const response = await fetch('/get-objectified-data', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        file_id: bill.id,
+                        mode: 'objectify'
+                    })
+                });
+                
+                if (response.ok) {
+                    objectifyModeData = await response.json();
+                    populateDataTable(objectifyModeData);
+                } else {
+                    // If endpoint doesn't exist, create mock objectified data
+                    objectifyModeData = createMockObjectifiedData(totalModeData);
+                    populateDataTable(objectifyModeData);
+                }
+            } catch (error) {
+                console.error('Error fetching objectified data:', error);
+                // Fallback to mock data
+                objectifyModeData = createMockObjectifiedData(totalModeData);
+                populateDataTable(objectifyModeData);
+            }
+        }
+
+        function createMockObjectifiedData(originalData) {
+            // This is a fallback function that attempts to split the total into items
+            // You should implement the actual logic in your Python backend
+            if (!originalData || originalData.length === 0) return originalData;
+            
+            const firstRow = originalData[0];
+            const totalNet = parseFloat(firstRow.Net) || 0;
+            const totalVAT = parseFloat(firstRow.VAT) || 0;
+            
+            // Example: Create 3 mock items
+            const items = [
+                {
+                    ...firstRow,
+                    Details: 'Item 1 - Fuel',
+                    Net: (totalNet * 0.5).toFixed(2),
+                    VAT: (totalVAT * 0.5).toFixed(2)
+                },
+                {
+                    ...firstRow,
+                    Details: 'Item 2 - Service',
+                    Net: (totalNet * 0.3).toFixed(2),
+                    VAT: (totalVAT * 0.3).toFixed(2)
+                },
+                {
+                    ...firstRow,
+                    Details: 'Item 3 - Miscellaneous',
+                    Net: (totalNet * 0.2).toFixed(2),
+                    VAT: (totalVAT * 0.2).toFixed(2)
+                }
+            ];
+            
+            return items;
+        }
+
+        async function displayBillInModal(index) {
+            if (index < 0 || index >= allBills.length) return;
+            
+            dataHasChanged = false; // Reset the edit tracker
+            currentFileIndex = index;
+            const bill = allBills[index];
+            if (!bill) return;
+
+            billNameH3.textContent = bill.filename;
+            if (bill.webViewLink) {
+                billFrame.src = bill.webViewLink.replace('/view', '/preview');
+            }
+            
+            // Show/hide email panel based on email_text
+            const emailPanel = document.getElementById('emailPanel');
+            const emailContent = document.getElementById('emailContent');
+            const rightPanel = document.querySelector('.right-panel');
+            
+            if (bill.email_text && bill.email_text.trim()) {
+                // Email text present: show 80% bill + 20% email
+                emailPanel.style.display = 'block';
+                emailContent.textContent = bill.email_text;
+                rightPanel.classList.add('with-email');
+            } else {
+                // No email text: show 100% bill (like before)
+                emailPanel.style.display = 'none';
+                rightPanel.classList.remove('with-email');
+            }
+            
+            prevBtn.disabled = (index === 0);
+            approveBtn.disabled = (bill.status === 'Approved');
+            approveBtn.textContent = (bill.status === 'Approved') ? 'Approved' : 'Approve & Next';
+
+            // If we already have cached total-mode data for this bill, render immediately and skip fetch
+            if (!isObjectifyMode && totalDataCache[bill.id]) {
+                totalModeData = totalDataCache[bill.id];
+                populateDataTable(totalModeData);
+                return;
+            }
+
+            // Otherwise fetch from server and cache it
+            populateDataTable([{"Status": "Extracting data, please wait..."}]);
+            try {
+                const response = await fetch('/get-extracted-data', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ file_id: bill.id })
+                });
+                const extractedData = await response.json();
+                totalModeData = extractedData; // Store total mode data
+                totalDataCache[bill.id] = extractedData; // Cache for next time
+                populateDataTable(extractedData);
+            } catch (error) {
+                const fallbackData = [
+                    { "supplier_name": bill.supplier_name || bill.supplier, "file_name": bill.filename, "upload_date": (bill.upload_date || '').split('T')[0], "invoice_date": bill.invoice_date, "gross_amount": bill.gross_amount || bill.amount }
+                ];
+                totalModeData = fallbackData;
+                totalDataCache[bill.id] = fallbackData;
+                populateDataTable(fallbackData);
+            }
+        }
+
+        async function approveAndGoToNext() {
+            const bill = allBills[currentFileIndex];
+            if (!bill) return;
+            // Prevent action if bill is approved AND no changes were made
+            if (bill.status === 'Approved' && !dataHasChanged) return;
+
+            approveBtn.disabled = true;
+            approveBtn.textContent = 'Saving...';
+            
+            const correctedData = getEditedData();
+            
+            // Add timeout to prevent hanging
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+            
+            try {
+                const response = await fetch('/approve', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        file_id: bill.id, 
+                        corrected_data: correctedData,
+                        mode: isObjectifyMode ? 'objectify' : 'total'
+                    }),
+                    signal: controller.signal
+                });
+                
+                clearTimeout(timeoutId);
+
+                if (response.ok) {
+                    bill.status = 'Approved';
+                    renderTable();
+
+                const nextPendingIndex = allBills.findIndex((file, index) => {
+                    return index > currentFileIndex && file.status === 'Pending';
+                });
+                
+                if (nextPendingIndex !== -1) {
+                    // Reset to total mode for next bill
+                    isObjectifyMode = false;
+                    totalModeData = null;
+                    objectifyModeData = null;
+                    updateModeUI();
+                    displayBillInModal(nextPendingIndex);
+                } else {
+                    alert('All pending bills have been reviewed!');
+                    closePreview();
+                }
+            } else {
+                // Show detailed error message from server
+                const errorData = await response.json().catch(() => ({}));
+                const errorMsg = errorData.error || "There was an error saving the changes.";
+                alert(errorMsg);
+                approveBtn.disabled = false;
+                approveBtn.textContent = 'Update & Next';
+            }
+            
+            } catch (error) {
+                clearTimeout(timeoutId);
+                if (error.name === 'AbortError') {
+                    alert('Request timed out. Please try again.');
+                } else {
+                    alert('Network error: ' + error.message);
+                }
+                approveBtn.disabled = false;
+                approveBtn.textContent = 'Approve & Next';
+            }
+        }
+
+        function getEditedData() {
+            const headers = Array.from(dataTable.querySelectorAll('thead th')).map(th => th.textContent);
+            const rows = dataTable.querySelectorAll('tbody tr');
+            const data = [];
+            rows.forEach(row => {
+                const rowData = {};
+                const cells = row.querySelectorAll('td');
+                headers.forEach((header, index) => { rowData[header] = cells[index].textContent; });
+                data.push(rowData);
+            });
+            return data;
+        }
+
+        function populateDataTable(data) {
+            const tableHead = dataTable.querySelector('thead');
+            const tableBody = dataTable.querySelector('tbody');
+            tableHead.innerHTML = ''; tableBody.innerHTML = '';
+
+            if (!data || data.length === 0 || data.error) {
+                tableBody.innerHTML = `<tr><td colspan="100%">${data ? data[0].Error || 'No data extracted.' : 'No data.'}</td></tr>`;
+                return;
+            }
+            const headers = Object.keys(data[0]);
+            let headerRow = '<tr>';
+            headers.forEach(h => headerRow += `<th>${h.replace(/_/g, ' ')}</th>`);
+            tableHead.innerHTML = headerRow + '</tr>';
+
+            data.forEach(item => {
+                let row = '<tr>';
+                headers.forEach(h => {
+                    const val = item[h] !== undefined && item[h] !== null ? item[h] : '';
+                    row += `<td contenteditable="true">${val}</td>`;
+                });
+                tableBody.innerHTML += row + '</tr>';
+            });
+        }
+
+        // --- FILTER AND SORT FUNCTIONALITY ---
+        let originalRows = [];
+        let currentSort = { column: -1, direction: 'none' };
+
+        function initializeFilters() {
+            const tableBody = document.getElementById('billList');
+            const filterInputs = document.querySelectorAll('.filter-input');
+            const sortableHeaders = document.querySelectorAll('.sortable');
+
+            // Store original rows
+            originalRows = Array.from(tableBody.querySelectorAll('tr'));
+
+            // Initialize supplier dropdown
+            initializeSupplierDropdown();
+
+            // Initialize filter inputs
+            filterInputs.forEach(input => {
+                input.addEventListener('input', function() {
+                    applyFiltersAndSort();
+                });
+            });
+
+            // Initialize sortable headers
+            sortableHeaders.forEach(header => {
+                header.addEventListener('click', function() {
+                    const columnIndex = parseInt(this.dataset.column);
+
+                    // Update sort direction
+                    if (currentSort.column === columnIndex) {
+                        if (currentSort.direction === 'none') {
+                            currentSort.direction = 'asc';
+                        } else if (currentSort.direction === 'asc') {
+                            currentSort.direction = 'desc';
+                        } else if (currentSort.direction === 'desc') {
+                            currentSort.direction = 'none';
+                        }
+                    } else {
+                        currentSort.column = columnIndex;
+                        currentSort.direction = 'asc';
+                    }
+
+                    updateSortIndicators();
+                    applyFiltersAndSort();
+                });
+            });
+        }
+
+        function updateSortIndicators() {
+            const sortableHeaders = document.querySelectorAll('.sortable');
+            sortableHeaders.forEach((header, index) => {
+                header.classList.remove('sort-asc', 'sort-desc');
+                if (currentSort.column === index) {
+                    if (currentSort.direction === 'asc') {
+                        header.classList.add('sort-asc');
+                    } else if (currentSort.direction === 'desc') {
+                        header.classList.add('sort-desc');
+                    }
+                }
+            });
+        }
+
+        function initializeSupplierDropdown() {
+            const dropdownFilter = document.querySelector('.dropdown-filter');
+            if (!dropdownFilter) return;
+            const dropdownTrigger = dropdownFilter.querySelector('.dropdown-trigger');
+            const dropdownMenu = dropdownFilter.querySelector('.dropdown-menu');
+            const dropdownText = dropdownFilter.querySelector('.dropdown-text');
+            const dropdownOptions = dropdownFilter.querySelector('.dropdown-options');
+            const dropdownSearch = dropdownFilter.querySelector('.dropdown-search-input');
+            const selectAllBtn = dropdownFilter.querySelector('.dropdown-select-all');
+            const clearBtn = dropdownFilter.querySelector('.dropdown-clear');
+
+            // Get unique supplier names
+            const supplierNames = [...new Set(originalRows.map(row => {
+                const cells = row.querySelectorAll('td');
+                return cells.length > 0 ? cells[0].textContent.trim() : '';
+            }))].filter(name => name);
+
+            // Populate dropdown options
+            function populateOptions(searchTerm = '') {
+                dropdownOptions.innerHTML = '';
+                const filteredSuppliers = supplierNames.filter(name =>
+                    name.toLowerCase().includes(searchTerm.toLowerCase())
+                );
+
+                filteredSuppliers.forEach(supplier => {
+                    const option = document.createElement('div');
+                    option.className = 'dropdown-option';
+                    const id = `supplier-${supplier.replace(/\s+/g, '-')}`;
+                    option.innerHTML = `
+                        <input type="checkbox" id="${id}" value="${supplier}">
+                        <label for="${id}">${supplier}</label>
+                    `;
+                    dropdownOptions.appendChild(option);
+                });
+            }
+
+            // Update dropdown text
+            function updateDropdownText() {
+                const selectedCheckboxes = dropdownOptions.querySelectorAll('input[type="checkbox"]:checked');
+                if (selectedCheckboxes.length === 0) {
+                    dropdownText.textContent = 'All Suppliers';
+                } else if (selectedCheckboxes.length === supplierNames.length) {
+                    dropdownText.textContent = 'All Suppliers';
+                } else if (selectedCheckboxes.length === 1) {
+                    dropdownText.textContent = selectedCheckboxes[0].value;
+                } else {
+                    dropdownText.textContent = `${selectedCheckboxes.length} Suppliers`;
+                }
+            }
+
+            // Toggle dropdown
+            dropdownTrigger.addEventListener('click', function(e) {
+                e.stopPropagation();
+                dropdownFilter.classList.toggle('active');
+                if (dropdownFilter.classList.contains('active')) {
+                    populateOptions();
+                    dropdownSearch.focus();
+                }
+            });
+
+            // Close dropdown when clicking outside
+            document.addEventListener('click', function(e) {
+                if (!dropdownFilter.contains(e.target)) {
+                    dropdownFilter.classList.remove('active');
+                }
+            });
+
+            // Search functionality
+            dropdownSearch.addEventListener('input', function() {
+                populateOptions(this.value);
+            });
+
+            // Option selection
+            dropdownOptions.addEventListener('change', function(e) {
+                if (e.target.type === 'checkbox') {
+                    updateDropdownText();
+                    applyFiltersAndSort();
+                }
+            });
+
+            // Select all button
+            selectAllBtn.addEventListener('click', function() {
+                const checkboxes = dropdownOptions.querySelectorAll('input[type="checkbox"]');
+                const allChecked = Array.from(checkboxes).every(cb => cb.checked);
+                checkboxes.forEach(cb => cb.checked = !allChecked);
+                updateDropdownText();
+                applyFiltersAndSort();
+            });
+
+            // Clear button
+            clearBtn.addEventListener('click', function() {
+                const checkboxes = dropdownOptions.querySelectorAll('input[type="checkbox"]');
+                checkboxes.forEach(cb => cb.checked = false);
+                updateDropdownText();
+                applyFiltersAndSort();
+            });
+
+            // Initialize
+            populateOptions();
+        }
+
+        function applyFiltersAndSort() {
+            const tableBody = document.getElementById('billList');
+            const filterInputs = document.querySelectorAll('.filter-input');
+            const dropdownFilter = document.querySelector('.dropdown-filter');
+
+            // Get supplier filter
+            const selectedSuppliers = [];
+            if (dropdownFilter) {
+                const selectedCheckboxes = dropdownFilter.querySelectorAll('input[type="checkbox"]:checked');
+                selectedSuppliers.push(...Array.from(selectedCheckboxes).map(cb => cb.value));
+            }
+
+            // Get filter values by column
+            const columnFilters = {};
+            filterInputs.forEach(input => {
+                const columnIndex = parseInt(input.dataset.column);
+                const filterValue = input.value.toLowerCase().trim();
+                if (filterValue) {
+                    columnFilters[columnIndex] = filterValue;
+                }
+            });
+
+            // Filter rows
+            let filteredRows = originalRows.filter(row => {
+                const cells = row.querySelectorAll('td');
+
+                // Check supplier filter (column 0)
+                if (selectedSuppliers.length > 0) {
+                    const supplierName = cells[0] ? cells[0].textContent.trim() : '';
+                    if (!selectedSuppliers.includes(supplierName)) {
+                        return false;
+                    }
+                }
+
+                // Check other column filters
+                for (const [columnIndex, filterValue] of Object.entries(columnFilters)) {
+                    const colIndex = parseInt(columnIndex);
+                    if (cells.length > colIndex) {
+                        const cellText = cells[colIndex].textContent.toLowerCase().trim();
+                        if (!cellText.includes(filterValue)) {
+                            return false;
+                        }
+                    }
+                }
+
+                return true;
+            });
+
+            // Sort rows if needed
+            if (currentSort.direction !== 'none') {
+                filteredRows.sort((a, b) => {
+                    const cellsA = a.querySelectorAll('td');
+                    const cellsB = b.querySelectorAll('td');
+
+                    if (cellsA.length <= currentSort.column || cellsB.length <= currentSort.column) {
+                        return 0;
+                    }
+
+                    const valueA = cellsA[currentSort.column].textContent.trim();
+                    const valueB = cellsB[currentSort.column].textContent.trim();
+
+                    // Handle numeric sorting for amounts
+                    if (currentSort.column === 4) { // Gross Amount column
+                        const numA = parseFloat(valueA.replace(/[^0-9.\-]/g, '')) || 0;
+                        const numB = parseFloat(valueB.replace(/[^0-9.\-]/g, '')) || 0;
+                        return currentSort.direction === 'asc' ? numA - numB : numB - numA;
+                    }
+
+                    // Handle date sorting
+                    if (currentSort.column === 1 || currentSort.column === 2) { // Date columns
+                        const dateA = new Date(valueA);
+                        const dateB = new Date(valueB);
+                        if (!isNaN(dateA.getTime()) && !isNaN(dateB.getTime())) {
+                            return currentSort.direction === 'asc' ? dateA - dateB : dateB - dateA;
+                        }
+                    }
+
+                    // Default text sorting
+                    const comparison = valueA.localeCompare(valueB);
+                    return currentSort.direction === 'asc' ? comparison : -comparison;
+                });
+            }
+
+            // Update table
+            tableBody.innerHTML = '';
+            filteredRows.forEach(row => {
+                tableBody.appendChild(row.cloneNode(true));
+            });
+        }
+
+        // Initialize filters when page loads (after server rows exist)
+        document.addEventListener('DOMContentLoaded', function() {
+            try { initializeFilters(); } catch (_e) {}
+        });
+        
+        // Logout function
+        async function logout() {
+            if (confirm('Are you sure you want to logout?')) {
+                try {
+                    await fetch('/logout', { method: 'POST' });
+                    window.location.href = '/login';
+                } catch (error) {
+                    window.location.href = '/login';
+                }
+            }
+        }
+    </script>
+</body>
+</html>

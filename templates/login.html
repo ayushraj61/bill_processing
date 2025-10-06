@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - Bill Processing System</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        .login-container {
+            background: white;
+            padding: 40px;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            width: 100%;
+            max-width: 400px;
+        }
+        .logo {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .logo img {
+            height: 50px;
+            margin-bottom: 10px;
+        }
+        h1 {
+            text-align: center;
+            color: #1f3b73;
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+        .subtitle {
+            text-align: center;
+            color: #64748b;
+            font-size: 14px;
+            margin-bottom: 30px;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            color: #334155;
+            font-weight: 500;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+        input {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            font-size: 15px;
+            transition: border-color 0.3s;
+        }
+        input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+        .btn-login {
+            width: 100%;
+            padding: 14px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .btn-login:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 25px rgba(102, 126, 234, 0.3);
+        }
+        .btn-login:active {
+            transform: translateY(0);
+        }
+        .error-message {
+            background: #fee2e2;
+            color: #dc2626;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 14px;
+            display: none;
+        }
+        .error-message.show {
+            display: block;
+        }
+        .footer {
+            text-align: center;
+            margin-top: 20px;
+            color: #94a3b8;
+            font-size: 13px;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <div class="logo">
+            <img src="/static/credentia_logo.png" alt="Logo">
+        </div>
+        <h1>Welcome Back</h1>
+        <p class="subtitle">Bill Processing Dashboard</p>
+        
+        <div id="errorMessage" class="error-message"></div>
+        
+        <form id="loginForm">
+            <div class="form-group">
+                <label for="email">Email Address</label>
+                <input type="email" id="email" name="email" required autocomplete="email" placeholder="your@email.com">
+            </div>
+            
+            <div class="form-group">
+                <label for="password">Password</label>
+                <input type="password" id="password" name="password" required autocomplete="current-password" placeholder="Enter your password">
+            </div>
+            
+            <button type="submit" class="btn-login">Sign In</button>
+        </form>
+        
+        <div style="text-align:center; margin-top:15px;">
+            <a href="#" onclick="showForgotPassword(event)" style="color:#667eea; text-decoration:none; font-size:14px;">Forgot Password?</a>
+        </div>
+        
+        <div class="footer">
+            Credentia Bill Processing System v2.0
+        </div>
+    </div>
+    
+    <!-- Forgot Password Modal -->
+    <div id="forgotPasswordModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:1000; justify-content:center; align-items:center;">
+        <div style="background:white; padding:30px; border-radius:12px; max-width:400px; width:90%;">
+            <h2 style="margin:0 0 20px; color:#1f3b73;">Reset Password</h2>
+            <p style="color:#64748b; margin-bottom:20px; font-size:14px;">Enter your email address and we'll send you a new password.</p>
+            
+            <div id="forgotMessage" class="message"></div>
+            
+            <div class="form-group">
+                <label>Email Address</label>
+                <input type="email" id="forgotEmail" placeholder="your@email.com">
+            </div>
+            
+            <div style="display:flex; gap:10px; margin-top:20px;">
+                <button onclick="resetPassword()" class="btn-login" style="flex:1;">Send New Password</button>
+                <button onclick="closeForgotPassword()" style="flex:1; background:#e2e8f0; color:#334155;">Cancel</button>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        const form = document.getElementById('loginForm');
+        const errorMessage = document.getElementById('errorMessage');
+        
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            
+            try {
+                const response = await fetch('/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    // Login successful
+                    if (data.role === 'admin') {
+                        window.location.href = '/admin';
+                    } else {
+                        window.location.href = '/dashboard';
+                    }
+                } else {
+                    // Show error
+                    errorMessage.textContent = data.error || 'Invalid email or password';
+                    errorMessage.classList.add('show');
+                }
+            } catch (error) {
+                errorMessage.textContent = 'An error occurred. Please try again.';
+                errorMessage.classList.add('show');
+            }
+        });
+        
+        // Forgot Password Functions
+        function showForgotPassword(e) {
+            e.preventDefault();
+            document.getElementById('forgotPasswordModal').style.display = 'flex';
+        }
+        
+        function closeForgotPassword() {
+            document.getElementById('forgotPasswordModal').style.display = 'none';
+            document.getElementById('forgotEmail').value = '';
+            document.getElementById('forgotMessage').classList.remove('show');
+        }
+        
+        async function resetPassword() {
+            const email = document.getElementById('forgotEmail').value;
+            const forgotMsg = document.getElementById('forgotMessage');
+            
+            if (!email) {
+                forgotMsg.textContent = 'Please enter your email address';
+                forgotMsg.className = 'message error show';
+                return;
+            }
+            
+            try {
+                const response = await fetch('/forgot-password', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    forgotMsg.textContent = data.message || 'New password sent to your email!';
+                    forgotMsg.className = 'message success show';
+                    
+                    // If password returned in response (email failed), show it
+                    if (data.password) {
+                        forgotMsg.innerHTML = `<strong>Your new password:</strong> ${data.password}<br><small>${data.note}</small>`;
+                    }
+                    
+                    // Close modal after 5 seconds
+                    setTimeout(() => {
+                        closeForgotPassword();
+                    }, 5000);
+                } else {
+                    forgotMsg.textContent = data.error || 'Password reset failed';
+                    forgotMsg.className = 'message error show';
+                }
+            } catch (error) {
+                forgotMsg.textContent = 'An error occurred. Please try again.';
+                forgotMsg.className = 'message error show';
+            }
+        }
+    </script>
+</body>
+</html>
+

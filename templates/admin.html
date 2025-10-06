@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Panel - Bill Processing System</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            margin: 0;
+            background: linear-gradient(135deg, #eef3ff 0%, #f9fbff 45%, #edf2fe 100%);
+            color: #0f1e3a;
+        }
+        .header {
+            background: #1f3b73;
+            color: white;
+            padding: 20px 40px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 24px;
+        }
+        .header-right {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+        }
+        .user-info {
+            font-size: 14px;
+            opacity: 0.9;
+        }
+        .btn-logout {
+            background: rgba(255,255,255,0.2);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.3);
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+        .btn-logout:hover {
+            background: rgba(255,255,255,0.3);
+        }
+        .container {
+            max-width: 1400px;
+            margin: 40px auto;
+            padding: 0 20px;
+        }
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        .tab {
+            padding: 12px 24px;
+            background: white;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+        .tab.active {
+            background: #1f3b73;
+            color: white;
+            border-color: #1f3b73;
+        }
+        .tab-content {
+            display: none;
+        }
+        .tab-content.active {
+            display: block;
+        }
+        .card {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+        }
+        .section-title {
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 20px;
+            color: #1f3b73;
+        }
+        .add-user-form {
+            background: #f8fafc;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 30px;
+        }
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr auto;
+            gap: 15px;
+            align-items: end;
+        }
+        .form-group {
+            display: flex;
+            flex-direction: column;
+        }
+        .form-group label {
+            font-size: 14px;
+            font-weight: 500;
+            margin-bottom: 6px;
+            color: #334155;
+        }
+        .form-group input, .form-group select {
+            padding: 10px 12px;
+            border: 2px solid #e2e8f0;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+        .form-group input:focus, .form-group select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 10px 24px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 500;
+            font-size: 14px;
+            transition: transform 0.2s;
+        }
+        .btn-primary:hover {
+            transform: translateY(-2px);
+        }
+        .btn-danger {
+            background: #dc2626;
+            color: white;
+            padding: 6px 12px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+        .btn-danger:hover {
+            background: #b91c1c;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #e2e8f0;
+        }
+        th {
+            background: #f1f5f9;
+            font-weight: 600;
+            color: #1f3b73;
+        }
+        tr:hover {
+            background: #f8fafc;
+        }
+        .badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        .badge-admin {
+            background: #dbeafe;
+            color: #1e40af;
+        }
+        .badge-user {
+            background: #d1fae5;
+            color: #065f46;
+        }
+        .companies-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 5px;
+        }
+        .company-tag {
+            background: #e0e7ff;
+            color: #3730a3;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+        .message {
+            padding: 12px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            display: none;
+        }
+        .message.success {
+            background: #d1fae5;
+            color: #065f46;
+            border: 1px solid #6ee7b7;
+        }
+        .message.error {
+            background: #fee2e2;
+            color: #dc2626;
+            border: 1px solid #fca5a5;
+        }
+        .message.show {
+            display: block;
+        }
+        #passwordDisplay {
+            background: #fef3c7;
+            padding: 15px;
+            border-radius: 6px;
+            margin-top: 15px;
+            display: none;
+            border: 2px solid #fbbf24;
+        }
+        #passwordDisplay.show {
+            display: block;
+        }
+        #passwordDisplay strong {
+            color: #92400e;
+            font-size: 18px;
+            font-family: monospace;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🔧 Admin Panel</h1>
+        <div class="header-right">
+            <span class="user-info">Logged in as: <strong id="adminEmail">{{ user_email }}</strong></span>
+            <button class="btn-logout" onclick="logout()">Logout</button>
+        </div>
+    </div>
+    
+    <div class="container">
+        <div class="tabs">
+            <div class="tab active" onclick="switchTab('users')">👥 User Management</div>
+            <div class="tab" onclick="switchTab('companies')">🏢 Company Emails</div>
+            <div class="tab" onclick="switchTab('logs')">📊 Activity Logs</div>
+        </div>
+        
+        <!-- Users Tab -->
+        <div id="users-tab" class="tab-content active">
+            <div class="card">
+                <h2 class="section-title">Add New User</h2>
+                
+                <div id="message" class="message"></div>
+                <div id="passwordDisplay">
+                    <p><strong>⚠️ User Created Successfully!</strong></p>
+                    <p style="margin-top:10px;">Generated Password: <strong id="generatedPassword"></strong></p>
+                    <p style="margin-top:10px; font-size:13px; color:#78350f;">Please share this password with the user. It will NOT be shown again!</p>
+                </div>
+                
+                <div class="add-user-form">
+                    <form id="addUserForm">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>User Email</label>
+                                <input type="email" id="userEmail" required placeholder="user@example.com">
+                            </div>
+                            <div class="form-group">
+                                <label>Accessible Companies</label>
+                                <input type="text" id="companies" required placeholder="PRL, Allstar" title="Comma-separated company names">
+                            </div>
+                            <div class="form-group">
+                                <label>Role</label>
+                                <select id="userRole">
+                                    <option value="user">User</option>
+                                    <option value="admin">Admin</option>
+                                </select>
+                            </div>
+                            <button type="submit" class="btn-primary">Add User</button>
+                        </div>
+                    </form>
+                </div>
+                
+                <h2 class="section-title">All Users</h2>
+                <table id="usersTable">
+                    <thead>
+                        <tr>
+                            <th>Email</th>
+                            <th>Role</th>
+                            <th>Accessible Companies</th>
+                            <th>Created At</th>
+                            <th>Created By</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="usersTableBody">
+                        <tr><td colspan="6">Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        
+        <!-- Companies Tab -->
+        <div id="companies-tab" class="tab-content">
+            <div class="card">
+                <h2 class="section-title">Add Company Email Mapping</h2>
+                
+                <div class="add-user-form">
+                    <form id="addCompanyForm">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Company Name</label>
+                                <input type="text" id="companyName" required placeholder="PRL">
+                            </div>
+                            <div class="form-group">
+                                <label>Sender Email</label>
+                                <input type="email" id="senderEmail" required placeholder="invoices@prl.com">
+                            </div>
+                            <button type="submit" class="btn-primary">Add Mapping</button>
+                        </div>
+                    </form>
+                </div>
+                
+                <h2 class="section-title">Company Email Mappings</h2>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Company Name</th>
+                            <th>Sender Email</th>
+                            <th>Created At</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="companiesTableBody">
+                        <tr><td colspan="4">Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        
+        <!-- Logs Tab -->
+        <div id="logs-tab" class="tab-content">
+            <div class="card">
+                <h2 class="section-title">User Activity Logs</h2>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Timestamp</th>
+                            <th>User Email</th>
+                            <th>Action</th>
+                            <th>Bill ID</th>
+                            <th>Company</th>
+                            <th>IP Address</th>
+                        </tr>
+                    </thead>
+                    <tbody id="logsTableBody">
+                        <tr><td colspan="6">Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        
+    </div>
+    
+    <script>
+        // Tab switching
+        function switchTab(tabName) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(tc => tc.classList.remove('active'));
+            
+            event.target.classList.add('active');
+            document.getElementById(tabName + '-tab').classList.add('active');
+            
+            // Load data for the tab
+            if (tabName === 'users') loadUsers();
+            if (tabName === 'companies') loadCompanies();
+            if (tabName === 'logs') loadLogs();
+        }
+        
+        // Add User
+        document.getElementById('addUserForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const email = document.getElementById('userEmail').value;
+            const companiesStr = document.getElementById('companies').value;
+            const role = document.getElementById('userRole').value;
+            
+            // Parse companies (comma-separated)
+            const companies = companiesStr.split(',').map(c => c.trim()).filter(c => c);
+            
+            try {
+                const response = await fetch('/admin/create-user', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, accessible_companies: companies, role })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    // Show generated password
+                    const passwordText = data.email_sent 
+                        ? `${data.password} (✅ Emailed to user)`
+                        : `${data.password} (⚠️ Email failed - share manually)`;
+                    
+                    document.getElementById('generatedPassword').textContent = passwordText;
+                    document.getElementById('passwordDisplay').classList.add('show');
+                    
+                    // Show success message
+                    const msg = data.email_sent 
+                        ? 'User created and credentials emailed!' 
+                        : 'User created! Please share password manually.';
+                    showMessage(msg, 'success');
+                    
+                    // Clear form
+                    e.target.reset();
+                    
+                    // Reload users table
+                    loadUsers();
+                    
+                    // Hide password after 30 seconds
+                    setTimeout(() => {
+                        document.getElementById('passwordDisplay').classList.remove('show');
+                    }, 30000);
+                } else {
+                    showMessage(data.error || 'Failed to create user', 'error');
+                }
+            } catch (error) {
+                showMessage('An error occurred', 'error');
+            }
+        });
+        
+        // Add Company Mapping
+        document.getElementById('addCompanyForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const companyName = document.getElementById('companyName').value;
+            const senderEmail = document.getElementById('senderEmail').value;
+            
+            try {
+                const response = await fetch('/admin/add-company-mapping', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ company_name: companyName, sender_email: senderEmail })
+                });
+                
+                if (response.ok) {
+                    showMessage('Company mapping added successfully!', 'success');
+                    e.target.reset();
+                    loadCompanies();
+                } else {
+                    const data = await response.json();
+                    showMessage(data.error || 'Failed to add mapping', 'error');
+                }
+            } catch (error) {
+                showMessage('An error occurred', 'error');
+            }
+        });
+        
+        // Load Users
+        async function loadUsers() {
+            try {
+                const response = await fetch('/admin/users');
+                const users = await response.json();
+                
+                const tbody = document.getElementById('usersTableBody');
+                tbody.innerHTML = '';
+                
+                users.forEach(user => {
+                    const companies = user.accessible_companies || [];
+                    const companiesTags = companies.map(c => `<span class="company-tag">${c}</span>`).join('');
+                    
+                    const row = `
+                        <tr>
+                            <td>${user.email}</td>
+                            <td><span class="badge badge-${user.role}">${user.role}</span></td>
+                            <td><div class="companies-list">${companiesTags || 'All companies'}</div></td>
+                            <td>${new Date(user.created_at).toLocaleString()}</td>
+                            <td>${user.created_by || '-'}</td>
+                            <td>
+                                ${user.role !== 'admin' ? `<button class="btn-danger" onclick="deleteUser('${user.email}')">Delete</button>` : '-'}
+                            </td>
+                        </tr>
+                    `;
+                    tbody.insertAdjacentHTML('beforeend', row);
+                });
+                
+                if (users.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="6">No users found</td></tr>';
+                }
+            } catch (error) {
+                console.error('Error loading users:', error);
+            }
+        }
+        
+        // Load Companies
+        async function loadCompanies() {
+            try {
+                const response = await fetch('/admin/company-mappings');
+                const companies = await response.json();
+                
+                const tbody = document.getElementById('companiesTableBody');
+                tbody.innerHTML = '';
+                
+                companies.forEach(comp => {
+                    const row = `
+                        <tr>
+                            <td><strong>${comp.company_name}</strong></td>
+                            <td>${comp.sender_email}</td>
+                            <td>${new Date(comp.created_at).toLocaleString()}</td>
+                            <td><button class="btn-danger" onclick="deleteCompany(${comp.id})">Delete</button></td>
+                        </tr>
+                    `;
+                    tbody.insertAdjacentHTML('beforeend', row);
+                });
+                
+                if (companies.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="4">No company mappings found</td></tr>';
+                }
+            } catch (error) {
+                console.error('Error loading companies:', error);
+            }
+        }
+        
+        // Load Activity Logs
+        async function loadLogs() {
+            try {
+                const response = await fetch('/admin/audit-logs');
+                const logs = await response.json();
+                
+                const tbody = document.getElementById('logsTableBody');
+                tbody.innerHTML = '';
+                
+                logs.forEach(log => {
+                    const row = `
+                        <tr>
+                            <td>${new Date(log.timestamp).toLocaleString()}</td>
+                            <td>${log.user_email}</td>
+                            <td>${log.action_type}</td>
+                            <td>${log.bill_id || '-'}</td>
+                            <td>${log.company_name || '-'}</td>
+                            <td>${log.ip_address || '-'}</td>
+                        </tr>
+                    `;
+                    tbody.insertAdjacentHTML('beforeend', row);
+                });
+                
+                if (logs.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="6">No activity logs found</td></tr>';
+                }
+            } catch (error) {
+                console.error('Error loading logs:', error);
+            }
+        }
+        
+        // Delete User
+        async function deleteUser(email) {
+            if (!confirm(`Are you sure you want to delete user: ${email}?`)) return;
+            
+            try {
+                const response = await fetch('/admin/delete-user', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email })
+                });
+                
+                if (response.ok) {
+                    showMessage('User deleted successfully', 'success');
+                    loadUsers();
+                } else {
+                    showMessage('Failed to delete user', 'error');
+                }
+            } catch (error) {
+                showMessage('An error occurred', 'error');
+            }
+        }
+        
+        // Delete Company
+        async function deleteCompany(id) {
+            if (!confirm('Are you sure you want to delete this company mapping?')) return;
+            
+            try {
+                const response = await fetch('/admin/delete-company-mapping', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id })
+                });
+                
+                if (response.ok) {
+                    showMessage('Company mapping deleted successfully', 'success');
+                    loadCompanies();
+                } else {
+                    showMessage('Failed to delete mapping', 'error');
+                }
+            } catch (error) {
+                showMessage('An error occurred', 'error');
+            }
+        }
+        
+        // Logout
+        async function logout() {
+            try {
+                await fetch('/logout', { method: 'POST' });
+                window.location.href = '/login';
+            } catch (error) {
+                window.location.href = '/login';
+            }
+        }
+        
+        // Show Message
+        function showMessage(text, type) {
+            const msg = document.getElementById('message');
+            msg.textContent = text;
+            msg.className = `message ${type} show`;
+            setTimeout(() => msg.classList.remove('show'), 5000);
+        }
+        
+        // Load initial data
+        window.onload = () => {
+            loadUsers();
+        };
+    </script>
+</body>
+</html>
+

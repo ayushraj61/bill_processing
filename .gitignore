@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual env
+venv/
+.env
+
+# Logs and runtime
+*.log
+cron.log
+automation.log
+nohup.out
+
+# Credentials / tokens / secrets
+credentials.json
+token.pickle
+token_email.pickle
+*.pickle
+database.json
+
+# Node/npm
+node_modules/
+package-lock.json
+
+# OS / Editor
+.DS_Store
+.vscode/
+.idea/
+
+

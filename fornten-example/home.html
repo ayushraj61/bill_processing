@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Bill Processing Dashboard</title>
+    <link rel="stylesheet" href="static/style.css">
+</head>
+<body>
+    <div class="main-container">
+        <h1>Bill Processing Dashboard</h1>
+        <div class="card">
+            <h2>Pending Bills</h2>
+            <p>Click on a status to review the bill.</p>
+            <table class="status-table">
+                <thead>
+                    <tr>
+                        <th>Supplier Name</th>
+                        <th>Upload Date</th>
+                        <th>File Name</th>
+                        <th>Status</th>
+                        <th>Gross Amount</th>
+                    </tr>
+                </thead>
+                <tbody id="billList">
+                    </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div id="previewModal" class="modal-overlay">
+        <div class="modal-content">
+            <div class="container">
+                <div class="right-panel">
+                    <div class="top-bar">
+                        <h3 id="billName">Loading Bill...</h3>
+                        <button class="close-button" onclick="closePreview()">×</button>
+                    </div>
+                    <div class="bill-viewer">
+                        <div class="placeholder-text">Bill preview would appear here</div>
+                    </div>
+                    <div class="data-table-container">
+                         <div class="table-header">
+                            <h3>Extracted Data</h3>
+                            <div class="action-buttons">
+                                <button id="prevBtn" class="button-secondary">Previous</button>
+                                <button id="nextBtn" class="button-secondary">Next</button>
+                                <button id="approveBtn" class="button-primary">Approve</button>
+                            </div>
+                        </div>
+                        <table id="dataTable">
+                           <thead></thead>
+                           <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script src="static/preview_app.js"></script>
+</body>
+</html>
