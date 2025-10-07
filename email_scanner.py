@@ -16,10 +16,14 @@ SCOPES = [
     'https://www.googleapis.com/auth/gmail.readonly',
     'https://www.googleapis.com/auth/gmail.modify'
 ]
-SOURCE_FOLDER_ID = '14h9shWD28VqgcCKluwbwnGuHpB0f5ZdT'  # Your pending bills folder
+SOURCE_FOLDER_ID = '1d_uPi4CnYaS6IptjVt-xQR3uAMpvfmTi'  # New pending bills folder
 
-# Database setup (reverted to local for development clones)
-DATABASE_URL = "postgresql://bill_user:ayush23854@localhost/bill_processor_db"
+# Database setup
+# Prefer environment variable; fall back to LIVE database URL
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "postgresql://postgres:AR%22%28M%28NB%28Qe%5B%22c9J@136.112.86.19:5432/postgres"
+)
 database = databases.Database(DATABASE_URL)
 metadata = sqlalchemy.MetaData()
 
@@ -131,26 +135,32 @@ def extract_email_body(payload):
     
     return body.strip()
 
-async def get_company_from_sender_email(sender_email):
-    """Get company name from sender email using database mapping"""
+async def get_company_from_recipient_email(recipient_email):
+    """Get company name from recipient email using database mapping"""
     try:
+        print(f"🔍 [DEBUG] Looking up company for recipient: {recipient_email}")
         await database.connect()
+        print(f"🔍 [DEBUG] Database connected successfully")
+        
         mapping = await database.fetch_one(
-            company_email_mapping.select().where(company_email_mapping.c.sender_email == sender_email)
+            company_email_mapping.select().where(company_email_mapping.c.sender_email == recipient_email)
         )
+        print(f"🔍 [DEBUG] Query result: {mapping}")
+        
         await database.disconnect()
         
         if mapping:
+            print(f"✅ [DEBUG] Found company: {mapping['company_name']}")
             return mapping['company_name']
         else:
-            print(f"⚠️  No company mapping found for sender: {sender_email}")
+            print(f"⚠️  No company mapping found for recipient: {recipient_email}")
             return "Unknown"  # Default fallback
     except Exception as e:
-        print(f"❌ Error getting company from sender email: {e}")
+        print(f"❌ Error getting company from recipient email: {e}")
         return "Unknown"
 
-async def create_company_month_folder(service_drive, company_name, invoice_date):
-    """Create Pending/Company/Month folder structure"""
+async def create_company_folder(service_drive, company_name):
+    """Create Pending/Company folder structure (NO month subfolder for pending)"""
     try:
         # Get or create company folder
         company_query = f"'{SOURCE_FOLDER_ID}' in parents and name='{company_name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
@@ -171,44 +181,10 @@ async def create_company_month_folder(service_drive, company_name, invoice_date)
             company_folder_id = company_items[0].get('id')
             print(f"📁 Found company folder: {company_name}")
         
-        # Get or create month folder (YYYY-MM format from invoice date)
-        if invoice_date:
-            if isinstance(invoice_date, str):
-                try:
-                    from datetime import datetime as dt
-                    invoice_date = dt.fromisoformat(invoice_date).date()
-                except:
-                    invoice_date = None
-            
-            if invoice_date:
-                month_name = invoice_date.strftime('%Y-%m')
-            else:
-                month_name = datetime.now().strftime('%Y-%m')
-        else:
-            month_name = datetime.now().strftime('%Y-%m')
-        
-        month_query = f"'{company_folder_id}' in parents and name='{month_name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
-        month_results = service_drive.files().list(q=month_query, fields="files(id)").execute()
-        month_items = month_results.get('files', [])
-        
-        if not month_items:
-            # Create month folder
-            month_metadata = {
-                'name': month_name,
-                'mimeType': 'application/vnd.google-apps.folder',
-                'parents': [company_folder_id]
-            }
-            month_folder = service_drive.files().create(body=month_metadata, fields='id').execute()
-            month_folder_id = month_folder.get('id')
-            print(f"📁 Created month folder: {month_name}")
-        else:
-            month_folder_id = month_items[0].get('id')
-            print(f"📁 Found month folder: {month_name}")
-        
-        return month_folder_id
+        return company_folder_id
         
     except Exception as e:
-        print(f"❌ Error creating company/month folder: {e}")
+        print(f"❌ Error creating company folder: {e}")
         return SOURCE_FOLDER_ID  # Fallback to main folder
 
 async def check_duplicate_by_invoice_reference(service_drive, pdf_data, filename):
@@ -237,7 +213,10 @@ async def check_duplicate_by_invoice_reference(service_drive, pdf_data, filename
             
             if invoice_reference:
                 # Check database for existing bill with same reference number
-                database = databases.Database("postgresql://bill_user:ayush23854@localhost/bill_processor_db")
+                database = databases.Database(os.getenv(
+                    "DATABASE_URL",
+                    "postgresql://postgres:AR%22%28M%28NB%28Qe%5B%22c9J@136.112.86.19:5432/postgres"
+                ))
                 await database.connect()
                 
                 try:
@@ -310,7 +289,8 @@ async def scan_and_upload_attachments():
         service_drive = build('drive', 'v3', credentials=creds)
         service_gmail = build('gmail', 'v1', credentials=creds)
         
-        # Search for unread emails with attachments
+        # Search for unread emails with attachments in the inbox
+        # Company detection happens later by reading the TO field from email headers
         # You can customize this query to filter by sender or subject
         # Examples:
         # query = 'is:unread has:attachment from:bills@supplier.com'
@@ -343,6 +323,12 @@ async def scan_and_upload_attachments():
             headers = msg['payload'].get('headers', [])
             subject = next((h['value'] for h in headers if h['name'] == 'Subject'), 'No Subject')
             sender = next((h['value'] for h in headers if h['name'] == 'From'), 'Unknown Sender')
+            recipient_raw = next((h['value'] for h in headers if h['name'] == 'To'), 'Unknown Recipient')
+            
+            # Extract clean email address from TO field (e.g., "Name <email@domain.com>" -> "email@domain.com")
+            import re
+            recipient_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', recipient_raw)
+            recipient = recipient_match.group(0) if recipient_match else recipient_raw
             
             # Extract email body text
             email_body = extract_email_body(msg['payload'])
@@ -388,16 +374,14 @@ async def scan_and_upload_attachments():
                                     print(f"    -> Duplicate bill detected (Invoice Ref: {invoice_reference}). Skipping...")
                                     continue
                                 
-                                # Determine company from sender email using database mapping
-                                company_name = await get_company_from_sender_email(sender)
-                                print(f"  📧 Sender: {sender} -> Company: {company_name}")
+                                # Determine company from recipient email using database mapping
+                                company_name = await get_company_from_recipient_email(recipient)
+                                print(f"  📧 Recipient: {recipient} -> Company: {company_name}")
                                 
-                                # Create company/month folder structure
-                                # For now, we'll use current date as invoice date since we don't have it yet
-                                # The actual invoice date will be extracted during processing
-                                target_folder_id = await create_company_month_folder(service_drive, company_name, None)
+                                # Create company folder structure (NO month subfolder for pending bills)
+                                target_folder_id = await create_company_folder(service_drive, company_name)
                                 
-                                # Upload to Google Drive in company/month folder
+                                # Upload to Google Drive in company folder
                                 media = MediaIoBaseUpload(
                                     io.BytesIO(file_data),
                                     mimetype='application/pdf',
@@ -407,6 +391,7 @@ async def scan_and_upload_attachments():
                                 # Prepare description with email body if available
                                 description_parts = [
                                     f'Uploaded from email: {sender}',
+                                    f'Recipient: {recipient}',
                                     f'Subject: {subject}',
                                     f'Company: {company_name}'
                                 ]
@@ -425,7 +410,7 @@ async def scan_and_upload_attachments():
                                     fields='id, name'
                                 ).execute()
                                 
-                                print(f"    -> Successfully uploaded '{filename}' to {client_name} folder")
+                                print(f"    -> Successfully uploaded '{filename}' to {company_name} folder")
                                 print(f"       File ID: {uploaded_file.get('id')}")
                                 uploaded_count += 1
                                 

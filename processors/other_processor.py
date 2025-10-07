@@ -124,7 +124,7 @@ def _safe_parse_llm_json(resp) -> dict | None:
         return None
 
 # --- Dept mapping by Post Code (use site_mappings table) ---
-DATABASE_URL = "postgresql://bill_user:ayush23854@localhost/bill_processor_db"
+DATABASE_URL = "postgresql://postgres:AR%22%28M%28NB%28Qe%5B%22c9J@136.112.86.19:5432/postgres"
 _engine = create_engine(DATABASE_URL)
 
 @lru_cache(maxsize=1)
@@ -368,7 +368,7 @@ def process_bill_objectified(pdf_object, filename, upload_date):
             prompt = (
                 "Read this PDF invoice and extract ALL individual line items/products.\n\n"
                 "Return a JSON ARRAY where each object represents ONE line item with keys:\n"
-                "['Type','A/C','Date','Ref','Ex.Ref','N/C','Dept','Details','Net','T/C','VAT','Supplier','PostCode','Bill Reference Number'].\n\n"
+                "['Type','A/C','Date','Ref','Ex.Ref','N/C','Dept','Details','Net','T/C','VAT','Supplier','PostCode'].\n\n"
                 "CRITICAL RULES:\n"
                 "- Create one object for EACH product/service line in the invoice (per-item), not the overall totals.\n"
                 "- DO NOT include 'Total', 'Sub Total', 'Grand Total', or summary rows as items.\n"
@@ -381,7 +381,6 @@ def process_bill_objectified(pdf_object, filename, upload_date):
                 "- Date=invoice date in YYYY-MM-DD\n"
                 "- Ref=ONLY numeric part from filename (NOT invoice number from text). If filename has no numbers, Ref should be empty or null\n"
                 "- Ex.Ref=<Month'YY>/<last-3 of Ref>\n"
-                "- Bill Reference Number=invoice number from the document text (e.g., '211780')\n"
                 "- Compute T/C based on VAT rate: T1≈20%, T5≈5%, T0≈0% (else T2; T9 if unknown)\n"
                 "- Extract UK PostCode if present\n\n"
                 "Return ONLY the JSON array (no markdown, no explanation). Ensure sum(Net) and sum(VAT) over items match the invoice totals (after rounding reconciliation)."
@@ -433,9 +432,6 @@ def process_bill_objectified(pdf_object, filename, upload_date):
                         # Fallback to filename if drive address generation fails
                         item['Ref'] = filename or "Unknown"
                     
-                    # Set Bill Reference Number from invoice_reference
-                    if invoice_reference:
-                        item['Bill Reference Number'] = invoice_reference
                     
                     # Generate Ex.Ref if missing
                     if not item.get('Ex.Ref'):
@@ -487,7 +483,7 @@ def process_bill_objectified(pdf_object, filename, upload_date):
                             item['T/C'] = 'T9'
                     
                     # Create clean line item (remove Supplier/PostCode)
-                    cols = ['Type','A/C','Date','Ref','Ex.Ref','N/C','Dept','Details','Net','T/C','VAT','Bill Reference Number']
+                    cols = ['Type','A/C','Date','Ref','Ex.Ref','N/C','Dept','Details','Net','T/C','VAT']
                     line = {k: item.get(k) for k in cols}
                     line_items.append(line)
                 
@@ -505,18 +501,13 @@ def process_bill_objectified(pdf_object, filename, upload_date):
                     
         except Exception as e:
             print(f"Objectify extraction error: {e}")
-            # Fall back to single line item with bill reference number
-            line_items = [{"error": f"Objectify extraction failed: {e}", "Bill Reference Number": invoice_reference or ""}]
+            # Fall back to single line item
+            line_items = [{"error": f"Objectify extraction failed: {e}"}]
     
     # If no items extracted, return single total item
     if not line_items:
         # Fall back to total mode extraction
         result = process_bill(pdf_object, filename, upload_date)
-        # Add bill reference number to the fallback result
-        if 'line_items' in result and result['line_items']:
-            for item in result['line_items']:
-                if isinstance(item, dict):
-                    item['Bill Reference Number'] = invoice_reference or ''
         return result
     
     return {
@@ -717,7 +708,6 @@ def process_bill(pdf_object, filename, upload_date):
         line = {
             'Type': 'PI', 'A/C': None, 'Date': date_fb, 'Ref': ref, 'Ex.Ref': ex_ref,
             'N/C': None, 'Dept': None, 'Details': supplier_fb, 'Net': None, 'T/C': None, 'VAT': None,
-            'Bill Reference Number': invoice_reference or '',
         }
         supplier = supplier_fb
         invoice_date_iso = date_fb

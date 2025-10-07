@@ -34,7 +34,7 @@ bills = sqlalchemy.Table(
     sqlalchemy.Column("supplier_name", sqlalchemy.String),
     sqlalchemy.Column("upload_date", sqlalchemy.DateTime(timezone=True)),  # Explicitly timezone-aware
     sqlalchemy.Column("invoice_date", sqlalchemy.Date),
-    sqlalchemy.Column("gross_amount", sqlalchemy.Numeric(10, 2)),
+    sqlalchemy.Column("gross_amount", sqlalchemy.Numeric(15, 2)),
     sqlalchemy.Column("status", sqlalchemy.String),
     sqlalchemy.Column("extracted_data", sqlalchemy.JSON),
     sqlalchemy.Column("email_text", sqlalchemy.Text),
@@ -52,7 +52,7 @@ bpoil = sqlalchemy.Table(
     sqlalchemy.Column("supplier_name", sqlalchemy.String),
     sqlalchemy.Column("upload_date", sqlalchemy.DateTime(timezone=True)),  # Explicitly timezone-aware
     sqlalchemy.Column("invoice_date", sqlalchemy.Date),
-    sqlalchemy.Column("gross_amount", sqlalchemy.Numeric(10, 2)),
+    sqlalchemy.Column("gross_amount", sqlalchemy.Numeric(15, 2)),
     sqlalchemy.Column("status", sqlalchemy.String),
     sqlalchemy.Column("extracted_data", sqlalchemy.JSON),
     sqlalchemy.Column("email_text", sqlalchemy.Text),
@@ -66,9 +66,9 @@ bpoil = sqlalchemy.Table(
     sqlalchemy.Column("n_c", sqlalchemy.String),
     sqlalchemy.Column("dept", sqlalchemy.String),
     sqlalchemy.Column("details", sqlalchemy.String),
-    sqlalchemy.Column("net", sqlalchemy.Numeric(10, 2)),
+    sqlalchemy.Column("net", sqlalchemy.Numeric(15, 2)),
     sqlalchemy.Column("t_c", sqlalchemy.String),
-    sqlalchemy.Column("vat", sqlalchemy.Numeric(10, 2)),
+    sqlalchemy.Column("vat", sqlalchemy.Numeric(15, 2)),
 )
 
 # Site mappings table for BP Oil
@@ -290,6 +290,10 @@ templates = Jinja2Templates(directory="templates")
 async def startup():
     await database.connect()
     print("✓ Database connected successfully")
+    
+    # Start email scanning background task
+    asyncio.create_task(email_scanning_loop())
+    print("✓ Email scanning automation started")
 
 @app.on_event("shutdown")
 async def shutdown():
@@ -301,8 +305,8 @@ SCOPES = [
     'https://www.googleapis.com/auth/drive',
     'https://www.googleapis.com/auth/spreadsheets'
 ]
-SOURCE_FOLDER_ID = '14h9shWD28VqgcCKluwbwnGuHpB0f5ZdT'
-DESTINATION_PARENT_FOLDER_ID = '1qGaIEOfv2t7ZtcbNDNkPO8kieOItMvux'
+SOURCE_FOLDER_ID = '1d_uPi4CnYaS6IptjVt-xQR3uAMpvfmTi'
+DESTINATION_PARENT_FOLDER_ID = '14_HNmG9Kg1K_HEVvV0RRm_ihbj7dtSsI'
 
 # BP Oil Sheets Configuration
 UNIVERSAL_APPROVED_SHEET_ID = '1WuUAvf9fZzcfjdkWXVG9ASDdF7oaz_b3dSNp7Cm4tMw'
@@ -361,6 +365,77 @@ def get_sheets_service():
     
     return build('sheets', 'v4', credentials=creds)
 
+def find_or_create_company_sheet(service, company_name):
+    """Find or create company sheet in approved folder"""
+    try:
+        # Look for company sheet in approved folder
+        company_folder_query = f"'{DESTINATION_PARENT_FOLDER_ID}' in parents and name='{company_name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
+        company_results = service.files().list(q=company_folder_query, fields="files(id)").execute()
+        company_folders = company_results.get('files', [])
+        
+        if not company_folders:
+            print(f"❌ [SHEETS] Company folder '{company_name}' not found in approved folder")
+            return None
+            
+        company_folder_id = company_folders[0]['id']
+        
+        # Look for existing sheet
+        sheet_name = f"{company_name} Approved Sheet"
+        sheet_query = f"'{company_folder_id}' in parents and name='{sheet_name}' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false"
+        sheet_results = service.files().list(q=sheet_query, fields="files(id,name)").execute()
+        existing_sheets = sheet_results.get('files', [])
+        
+        if existing_sheets:
+            print(f"✅ [SHEETS] Found existing sheet: {sheet_name}")
+            return existing_sheets[0]['id']
+        
+        # Create new sheet
+        print(f"📊 [SHEETS] Creating new sheet: {sheet_name}")
+        sheets_service = get_sheets_service()
+        
+        # Create spreadsheet
+        spreadsheet_body = {
+            'properties': {
+                'title': sheet_name
+            },
+            'sheets': [{
+                'properties': {
+                    'title': 'Sheet1',
+                    'gridProperties': {
+                        'rowCount': 1000,
+                        'columnCount': 11
+                    }
+                }
+            }]
+        }
+        
+        spreadsheet = sheets_service.spreadsheets().create(body=spreadsheet_body).execute()
+        spreadsheet_id = spreadsheet['spreadsheetId']
+        
+        # Move sheet to company folder
+        service.files().update(
+            fileId=spreadsheet_id,
+            addParents=company_folder_id,
+            removeParents='root',
+            fields='id,parents'
+        ).execute()
+        
+        # Add headers
+        headers = ['Type','A/C','Date','Ref','Ex.Ref','N/C','Dept','Details','Net','T/C','VAT']
+        sheets_service.spreadsheets().values().update(
+            spreadsheetId=spreadsheet_id,
+            range='Sheet1!A1:K1',
+            valueInputOption='USER_ENTERED',
+            body={'values': [headers]}
+        ).execute()
+        
+        print(f"✅ [SHEETS] Created new sheet: {sheet_name} (ID: {spreadsheet_id})")
+        return spreadsheet_id
+        
+    except Exception as e:
+        print(f"❌ [SHEETS] Error finding/creating company sheet: {e}")
+        return None
+
 def append_bpoil_rows_to_sheet(spreadsheet_id: str, rows: list[dict]):
     """Append BP Oil rows to Google Sheet"""
     if not rows:
@@ -371,7 +446,7 @@ def append_bpoil_rows_to_sheet(spreadsheet_id: str, rows: list[dict]):
         headers = ['Type','A/C','Date','Ref','Ex.Ref','N/C','Dept','Details','Net','T/C','VAT']
         
         # Check if headers exist
-        range_a1 = f'{UNIVERSAL_APPROVED_TAB}!1:1'
+        range_a1 = f'Sheet1!1:1'
         resp = sheets.spreadsheets().values().get(
             spreadsheetId=spreadsheet_id,
             range=range_a1,
@@ -398,7 +473,7 @@ def append_bpoil_rows_to_sheet(spreadsheet_id: str, rows: list[dict]):
         # Append data
         sheets.spreadsheets().values().append(
             spreadsheetId=spreadsheet_id,
-            range=f'{UNIVERSAL_APPROVED_TAB}!A1',
+            range='Sheet1!A1',
             valueInputOption='USER_ENTERED',
             insertDataOption='INSERT_ROWS',
             body={'values': values}
@@ -610,6 +685,35 @@ async def process_new_files_background():
         # Reset processing status
         processing_status["is_processing"] = False
         processing_status["current_file"] = None
+
+# Email scanning background task
+async def email_scanning_loop():
+    """Continuously scan for new emails and upload to Drive"""
+    print("📧 [EMAIL SCANNER] Starting email scanning automation...")
+    
+    while True:
+        try:
+            # Import email scanner functions
+            from email_scanner import scan_and_upload_attachments
+            
+            # Run email scanning
+            result = await scan_and_upload_attachments()
+            
+            if result > 0:
+                print(f"📧 [EMAIL SCANNER] Found and uploaded {result} new bill(s)")
+                # Trigger background processing of new files
+                asyncio.create_task(process_new_files_background())
+            elif result == 0:
+                print("📧 [EMAIL SCANNER] No new emails found")
+            else:
+                print("📧 [EMAIL SCANNER] Email scanning failed")
+                
+        except Exception as e:
+            print(f"📧 [EMAIL SCANNER] Error: {e}")
+            traceback.print_exc()
+        
+        # Wait 2 minutes before next scan
+        await asyncio.sleep(120)
 
 # --- Authentication Endpoints ---
 @app.get("/login", response_class=HTMLResponse)
@@ -1276,10 +1380,9 @@ async def get_extracted_data(request: Request, session_token: str = Cookie(None)
                     'Net': float(r['net']) if r['net'] is not None else None,
                     'T/C': r['t_c'],
                     'VAT': float(r['vat']) if r['vat'] is not None else None,
-                    'Bill Reference Number': r['bill_reference_number'] or '',
                 }
                 # Reorder keys to match desired column order
-                key_order = ['Type', 'A/C', 'Date', 'Ref', 'Ex.Ref', 'N/C', 'Dept', 'Details', 'Net', 'T/C', 'VAT', 'Bill Reference Number']
+                key_order = ['Type', 'A/C', 'Date', 'Ref', 'Ex.Ref', 'N/C', 'Dept', 'Details', 'Net', 'T/C', 'VAT', ]
                 payload.append(reorder_dict_keys(row_data, key_order))
             return JSONResponse(content=payload)
         
@@ -1298,16 +1401,11 @@ async def get_extracted_data(request: Request, session_token: str = Cookie(None)
                     ref_from_filename = None
                 for item in extracted_data:
                     if isinstance(item, dict):
-                        # Use bill_reference_number for bpoil table, invoice_reference for bills table
-                        if 'bill_reference_number' in bill:
-                            item['Bill Reference Number'] = bill['bill_reference_number'] or ''
-                        else:
-                            item['Bill Reference Number'] = bill['invoice_reference'] or ''
                         # Enforce Ref from filename only (6+ digits)
                         item['Ref'] = ref_from_filename
                 
                 # Reorder keys for other suppliers
-                key_order = ['Type', 'A/C', 'Date', 'Ref', 'Ex.Ref', 'N/C', 'Dept', 'Details', 'Net', 'T/C', 'VAT', 'Bill Reference Number']
+                key_order = ['Type', 'A/C', 'Date', 'Ref', 'Ex.Ref', 'N/C', 'Dept', 'Details', 'Net', 'T/C', 'VAT', ]
                 reordered_data = []
                 for item in extracted_data:
                     if isinstance(item, dict):
@@ -1385,7 +1483,6 @@ async def get_objectified_data(request: Request, session_token: str = Cookie(Non
                         'Net': float(r['net']) if r['net'] is not None else None,
                         'T/C': r['t_c'],
                         'VAT': float(r['vat']) if r['vat'] is not None else None,
-                        'Bill Reference Number': r['bill_reference_number'] or '',
                     })
                 return JSONResponse(content=payload)
         
@@ -1406,11 +1503,6 @@ async def get_objectified_data(request: Request, session_token: str = Cookie(Non
                         ref_from_filename = None
                     for item in extracted_data:
                         if isinstance(item, dict):
-                            # Use bill_reference_number for bpoil table, invoice_reference for bills table
-                            if 'bill_reference_number' in bill:
-                                item['Bill Reference Number'] = bill['bill_reference_number'] or ''
-                            else:
-                                item['Bill Reference Number'] = bill['invoice_reference'] or ''
                             # Enforce Ref from filename only (never invoice number)
                             item['Ref'] = ref_from_filename
                 return JSONResponse(content=extracted_data)
@@ -1433,11 +1525,6 @@ async def get_objectified_data(request: Request, session_token: str = Cookie(Non
                 # Add bill reference number to each line item
                 for item in line_items:
                     if isinstance(item, dict):
-                        # Use bill_reference_number for bpoil table, invoice_reference for bills table
-                        if 'bill_reference_number' in bill:
-                            item['Bill Reference Number'] = bill['bill_reference_number'] or ''
-                        else:
-                            item['Bill Reference Number'] = bill['invoice_reference'] or ''
                         # Enforce Ref from filename only (6+ digits)
                         try:
                             import re
@@ -1447,7 +1534,7 @@ async def get_objectified_data(request: Request, session_token: str = Cookie(Non
                             item['Ref'] = None
                 
                 # Reorder keys for objectified data
-                key_order = ['Type', 'A/C', 'Date', 'Ref', 'Ex.Ref', 'N/C', 'Dept', 'Details', 'Net', 'T/C', 'VAT', 'Bill Reference Number']
+                key_order = ['Type', 'A/C', 'Date', 'Ref', 'Ex.Ref', 'N/C', 'Dept', 'Details', 'Net', 'T/C', 'VAT', ]
                 reordered_line_items = []
                 for item in line_items:
                     if isinstance(item, dict):
@@ -1460,7 +1547,7 @@ async def get_objectified_data(request: Request, session_token: str = Cookie(Non
                 # Fall back to existing data
                 if bill['extracted_data']:
                     # Reorder keys for fallback data
-                    key_order = ['Type', 'A/C', 'Date', 'Ref', 'Ex.Ref', 'N/C', 'Dept', 'Details', 'Net', 'T/C', 'VAT', 'Bill Reference Number']
+                    key_order = ['Type', 'A/C', 'Date', 'Ref', 'Ex.Ref', 'N/C', 'Dept', 'Details', 'Net', 'T/C', 'VAT', ]
                     fallback_data = bill['extracted_data']
                     if isinstance(fallback_data, list):
                         reordered_fallback = []
@@ -1488,14 +1575,14 @@ async def get_objectified_data(request: Request, session_token: str = Cookie(Non
                     ref_from_filename = None
                 for item in extracted_data:
                     if isinstance(item, dict):
-                        # Use bill_reference_number for bpoil table, invoice_reference for bills table
-                        if 'bill_reference_number' in bill:
-                            item['Bill Reference Number'] = bill['bill_reference_number'] or ''
-                        else:
-                            item['Bill Reference Number'] = bill['invoice_reference'] or ''
+                        # Enforce Ref from filename only (6+ digits)
+                        try:
+                            item['Ref'] = ref_from_filename
+                        except Exception:
+                            pass
                 
                 # Reorder keys for default fallback
-                key_order = ['Type', 'A/C', 'Date', 'Ref', 'Ex.Ref', 'N/C', 'Dept', 'Details', 'Net', 'T/C', 'VAT', 'Bill Reference Number']
+                key_order = ['Type', 'A/C', 'Date', 'Ref', 'Ex.Ref', 'N/C', 'Dept', 'Details', 'Net', 'T/C', 'VAT', ]
                 reordered_fallback = []
                 for item in extracted_data:
                     if isinstance(item, dict):
@@ -1662,10 +1749,10 @@ async def approve_bill(request: Request, session_token: str = Cookie(None)):
             try:
                 move_result = service.files().update(
                     fileId=actual_drive_file_id,
-                    addParents=final_parent_id,
+                addParents=final_parent_id,
                     removeParents=previous_parents,
                     fields='id, parents'
-                ).execute()
+            ).execute()
                 print(f"[APPROVE] File moved successfully: {move_result.get('id')}")
             except Exception as move_error:
                 print(f"[APPROVE] Error moving file: {move_error}")
@@ -1702,6 +1789,25 @@ async def approve_bill(request: Request, session_token: str = Cookie(None)):
             # Log the approval action
             await log_user_action(user['email'], "approve_bill", client_ip, 
                                 details={"bill_id": file_id, "company": company_name, "month": month_name})
+            
+            # Send data to Google Sheets
+            try:
+                print(f"[APPROVE] 📊 Sending data to Google Sheets for {company_name}")
+                
+                # Find or create company sheet
+                company_sheet_id = find_or_create_company_sheet(service, company_name)
+                
+                if company_sheet_id and corrected_data:
+                    # Send approved data to company sheet
+                    append_bpoil_rows_to_sheet(company_sheet_id, corrected_data)
+                    print(f"✅ [APPROVE] Data sent to {company_name} Approved Sheet")
+                else:
+                    print(f"⚠️ [APPROVE] No sheet found/created or no data to send")
+                    
+            except Exception as sheets_error:
+                print(f"❌ [APPROVE] Google Sheets error: {sheets_error}")
+                # Don't fail the approval if sheets fails
+                pass
             
             return JSONResponse(content={"success": True, "message": f"Bill approved and moved to Approved/{company_name}/{month_name}/"})
             
@@ -1793,8 +1899,8 @@ async def rescan_all():
         traceback.print_exc()
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
-def create_company_month_folder_for_upload(service, company_name, invoice_date):
-    """Create Pending/Company/Month folder structure for uploads"""
+def create_company_folder_for_upload(service, company_name):
+    """Create Pending/Company folder structure for uploads (NO month subfolder)"""
     try:
         # Get or create company folder in Pending Bills
         company_query = f"'{SOURCE_FOLDER_ID}' in parents and name='{company_name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
@@ -1815,44 +1921,10 @@ def create_company_month_folder_for_upload(service, company_name, invoice_date):
             company_folder_id = company_items[0].get('id')
             print(f"[UPLOAD] Found company folder: {company_name}")
         
-        # Get or create month folder (YYYY-MM format)
-        if invoice_date:
-            if isinstance(invoice_date, str):
-                try:
-                    from datetime import datetime as dt
-                    invoice_date = dt.fromisoformat(invoice_date).date()
-                except:
-                    invoice_date = None
-            
-            if invoice_date:
-                month_name = invoice_date.strftime('%Y-%m')
-            else:
-                month_name = datetime.now().strftime('%Y-%m')
-        else:
-            month_name = datetime.now().strftime('%Y-%m')
-        
-        month_query = f"'{company_folder_id}' in parents and name='{month_name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
-        month_results = service.files().list(q=month_query, fields="files(id)").execute()
-        month_items = month_results.get('files', [])
-        
-        if not month_items:
-            # Create month folder
-            month_metadata = {
-                'name': month_name,
-                'mimeType': 'application/vnd.google-apps.folder',
-                'parents': [company_folder_id]
-            }
-            month_folder = service.files().create(body=month_metadata, fields='id').execute()
-            month_folder_id = month_folder.get('id')
-            print(f"[UPLOAD] Created month folder: {month_name}")
-        else:
-            month_folder_id = month_items[0].get('id')
-            print(f"[UPLOAD] Found month folder: {month_name}")
-        
-        return month_folder_id
+        return company_folder_id
         
     except Exception as e:
-        print(f"[UPLOAD] Error creating company/month folder: {e}")
+        print(f"[UPLOAD] Error creating company folder: {e}")
         return SOURCE_FOLDER_ID  # Fallback to main folder
 
 # --- Upload Endpoint: PDF + optional supplier, upload to Drive, extract, save to DB ---
@@ -1895,10 +1967,10 @@ async def upload_bill(request: Request, file: UploadFile = File(...), supplier: 
         file_content = await file.read()
         print(f"[UPLOAD] File content read: {len(file_content)} bytes")
         
-        # Create company/month folder structure for upload
-        print(f"[UPLOAD] Creating company/month folder for {company_name}...")
+        # Create company folder structure for upload (NO month subfolder)
+        print(f"[UPLOAD] Creating company folder for {company_name}...")
         try:
-            target_folder_id = create_company_month_folder_for_upload(service, company_name, None)
+            target_folder_id = create_company_folder_for_upload(service, company_name)
             print(f"[UPLOAD] Target folder ID: {target_folder_id}")
         except Exception as folder_error:
             print(f"[UPLOAD] ERROR creating folder: {folder_error}")
