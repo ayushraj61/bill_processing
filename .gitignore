@@ -31,3 +31,20 @@ package-lock.json
 .idea/
 
 
+
+# Local environment
+.env
+.env.*
+*.env
+*.env.*
+# Token files
+token.pickle
+token_email.pickle
+# Logs
+*.log
+cron.log
+automation.log
+# OS/editor
+.DS_Store
+.vscode/
+.idea/
