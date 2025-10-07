@@ -19,10 +19,74 @@ import hashlib
 import secrets
 import string
 
+# Lightweight in-process cache for extracted data to reduce DB trips on repeat opens
+_EXTRACTED_TTL_SECONDS = 60
+_extracted_cache = {}  # key: file_id -> {"ts": datetime, "payload": list[dict]}
+
+def _cache_get_extracted(file_id: str):
+    try:
+        entry = _extracted_cache.get(file_id)
+        if not entry:
+            return None
+        if (datetime.now(timezone.utc) - entry["ts"]).total_seconds() > _EXTRACTED_TTL_SECONDS:
+            _extracted_cache.pop(file_id, None)
+            return None
+        return entry["payload"]
+    except Exception:
+        return None
+
+def _cache_set_extracted(file_id: str, payload):
+    try:
+        _extracted_cache[file_id] = {"ts": datetime.now(timezone.utc), "payload": payload}
+    except Exception:
+        pass
+
 # --- Database Configuration ---
 DATABASE_URL = "postgresql://postgres:AR%22%28M%28NB%28Qe%5B%22c9J@136.112.86.19:5432/postgres"
-database = databases.Database(DATABASE_URL)
+# Use a small asyncpg pool with a sane connect timeout to avoid Cloud SQL slot/latency issues
+database = databases.Database(
+    DATABASE_URL,
+    min_size=1,
+    max_size=5,
+    timeout=10.0,
+)
 metadata = sqlalchemy.MetaData()
+
+# --- Quick DB helpers to avoid hanging the UI on slow/unstable connections ---
+async def ensure_db_connected():
+    try:
+        if not database.is_connected:
+            await database.connect()
+    except Exception:
+        # one immediate retry
+        try:
+            await asyncio.sleep(0.2)
+            await database.connect()
+        except Exception:
+            pass
+
+async def db_fetch_one_quick(query, timeout: float = 3.0, retries: int = 1):
+    for attempt in range(retries + 1):
+        try:
+            await ensure_db_connected()
+            return await asyncio.wait_for(database.fetch_one(query), timeout=timeout)
+        except Exception:
+            if attempt >= retries:
+                raise
+            # brief backoff then retry
+            await asyncio.sleep(0.3 * (attempt + 1))
+
+async def db_execute_quick(query, values=None, timeout: float = 3.0, retries: int = 1):
+    for attempt in range(retries + 1):
+        try:
+            await ensure_db_connected()
+            if values is None:
+                return await asyncio.wait_for(database.execute(query), timeout=timeout)
+            return await asyncio.wait_for(database.execute(query, values), timeout=timeout)
+        except Exception:
+            if attempt >= retries:
+                raise
+            await asyncio.sleep(0.3 * (attempt + 1))
 
 # Main bills table
 bills = sqlalchemy.Table(
@@ -732,9 +796,11 @@ async def login(request: Request, response: Response):
         if not email or not password:
             return JSONResponse(content={"error": "Email and password required"}, status_code=400)
         
-        # Find user
-        user = await database.fetch_one(
-            users.select().where((users.c.email == email) & (users.c.is_active == True))
+        # Find user (fast query with timeout + retry)
+        user = await db_fetch_one_quick(
+            users.select().where((users.c.email == email) & (users.c.is_active == True)),
+            timeout=3.0,
+            retries=1,
         )
         
         if not user or not verify_password(password, user['password_hash']):
@@ -744,17 +810,23 @@ async def login(request: Request, response: Response):
         session_token = generate_session_token()
         client_ip = request.client.host if request.client else None
         
-        await database.execute(
+        await db_execute_quick(
             user_sessions.insert().values(
                 user_email=email,
                 session_token=session_token,
                 ip_address=client_ip,
                 is_active=True
-            )
+            ),
+            timeout=3.0,
+            retries=1,
         )
         
         # Log login action
-        await log_user_action(email, "login", client_ip)
+        try:
+            await log_user_action(email, "login", client_ip)
+        except Exception:
+            # don't fail login on slow audit log
+            pass
         
         # Set session cookie
         response = JSONResponse(content={"success": True, "role": user['role']})
@@ -1225,11 +1297,11 @@ async def dashboard(request: Request, background_tasks: BackgroundTasks, session
         else:
             # Show all bills (for admin or users without company access)
             bills_pending = await database.fetch_all(
-                bills.select().where(bills.c.status == 'Pending').order_by(bills.c.upload_date.desc())
-            )
+            bills.select().where(bills.c.status == 'Pending').order_by(bills.c.upload_date.desc())
+        )
             bpoil_pending = await database.fetch_all(
-                bpoil.select().where(bpoil.c.status == 'Pending').order_by(bpoil.c.upload_date.desc())
-            )
+            bpoil.select().where(bpoil.c.status == 'Pending').order_by(bpoil.c.upload_date.desc())
+        )
         
         pending_bills = list(bills_pending) + list(bpoil_pending)
 
@@ -1344,13 +1416,24 @@ async def get_extracted_data(request: Request, session_token: str = Cookie(None)
         data = await request.json()
         file_id = data.get('file_id')
 
-        # Check bills table first (for Allstar)
-        query = bills.select().where(bills.c.id == file_id)
-        bill = await database.fetch_one(query)
-        
-        # If not in bills table, check bpoil table (for BP Oil and Other)
-        if not bill:
-            bill = await database.fetch_one(bpoil.select().where(bpoil.c.drive_file_id == file_id))
+        # Fast path: serve from in-process cache
+        cached = _cache_get_extracted(file_id)
+        if cached is not None:
+            return JSONResponse(content=cached)
+
+        # Query both tables concurrently and use whichever returns first
+        async def fetch_bill_from_bills():
+            try:
+                return await database.fetch_one(bills.select().where(bills.c.id == file_id))
+            except Exception:
+                return None
+        async def fetch_bill_from_bpoil():
+            try:
+                return await database.fetch_one(bpoil.select().where(bpoil.c.drive_file_id == file_id))
+            except Exception:
+                return None
+        bill_from_bills, bill_from_bpoil = await asyncio.gather(fetch_bill_from_bills(), fetch_bill_from_bpoil())
+        bill = bill_from_bills or bill_from_bpoil
         
         if not bill:
             return JSONResponse(content=[{"Error": "Bill not found"}])
@@ -1384,6 +1467,7 @@ async def get_extracted_data(request: Request, session_token: str = Cookie(None)
                 # Reorder keys to match desired column order
                 key_order = ['Type', 'A/C', 'Date', 'Ref', 'Ex.Ref', 'N/C', 'Dept', 'Details', 'Net', 'T/C', 'VAT', ]
                 payload.append(reorder_dict_keys(row_data, key_order))
+            _cache_set_extracted(file_id, payload)
             return JSONResponse(content=payload)
         
         # For other suppliers, return extracted_data field with bill reference number
@@ -1412,6 +1496,7 @@ async def get_extracted_data(request: Request, session_token: str = Cookie(None)
                         reordered_data.append(reorder_dict_keys(item, key_order))
                     else:
                         reordered_data.append(item)
+                _cache_set_extracted(file_id, reordered_data)
                 return JSONResponse(content=reordered_data)
         
         return JSONResponse(content=[{"Error": "No extracted data found"}])
@@ -1749,10 +1834,10 @@ async def approve_bill(request: Request, session_token: str = Cookie(None)):
             try:
                 move_result = service.files().update(
                     fileId=actual_drive_file_id,
-                addParents=final_parent_id,
+                    addParents=final_parent_id,
                     removeParents=previous_parents,
                     fields='id, parents'
-            ).execute()
+                ).execute()
                 print(f"[APPROVE] File moved successfully: {move_result.get('id')}")
             except Exception as move_error:
                 print(f"[APPROVE] Error moving file: {move_error}")

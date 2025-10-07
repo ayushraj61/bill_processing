@@ -1,4 +1,5 @@
 import os
+import asyncio
 import base64
 import pickle
 from googleapiclient.discovery import build
@@ -24,7 +25,36 @@ DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "postgresql://postgres:AR%22%28M%28NB%28Qe%5B%22c9J@136.112.86.19:5432/postgres"
 )
-database = databases.Database(DATABASE_URL)
+database = databases.Database(
+    DATABASE_URL,
+    min_size=1,   # keep scanner footprint tiny
+    max_size=1,   # do not compete with web app pool
+    timeout=5.0,
+)
+_db_semaphore = asyncio.Semaphore(1)  # serialize scanner DB access
+
+# Simple async retry with exponential backoff for transient DB errors
+async def _retry_async(fn, *args, retries: int = 5, base_delay: float = 0.5, **kwargs):
+    attempt = 0
+    while True:
+        try:
+            return await fn(*args, **kwargs)
+        except Exception as e:
+            attempt += 1
+            if attempt > retries:
+                raise e
+            delay = base_delay * (2 ** (attempt - 1))
+            print(f"[DB RETRY] attempt {attempt}/{retries} after error: {type(e).__name__}: {e}. Sleeping {delay:.2f}s")
+            await asyncio.sleep(delay)
+
+async def ensure_db():
+    try:
+        if not database.is_connected:
+            await database.connect()
+    except Exception:
+        # One immediate retry to re-establish pool
+        await asyncio.sleep(0.25)
+        await database.connect()
 metadata = sqlalchemy.MetaData()
 
 # Company email mapping table
@@ -139,15 +169,16 @@ async def get_company_from_recipient_email(recipient_email):
     """Get company name from recipient email using database mapping"""
     try:
         print(f"🔍 [DEBUG] Looking up company for recipient: {recipient_email}")
-        await database.connect()
-        print(f"🔍 [DEBUG] Database connected successfully")
-        
-        mapping = await database.fetch_one(
-            company_email_mapping.select().where(company_email_mapping.c.sender_email == recipient_email)
-        )
-        print(f"🔍 [DEBUG] Query result: {mapping}")
-        
-        await database.disconnect()
+        async with _db_semaphore:
+            await ensure_db()
+            print(f"🔍 [DEBUG] Database connected successfully")
+            
+            async def _fetch():
+                return await database.fetch_one(
+                    company_email_mapping.select().where(company_email_mapping.c.sender_email == recipient_email)
+                )
+            mapping = await _retry_async(_fetch)
+            print(f"🔍 [DEBUG] Query result: {mapping}")
         
         if mapping:
             print(f"✅ [DEBUG] Found company: {mapping['company_name']}")
@@ -297,9 +328,11 @@ async def scan_and_upload_attachments():
         # query = 'is:unread has:attachment subject:invoice'
         query = 'is:unread has:attachment'
         
+        # Limit batch size to keep web requests responsive
         results = service_gmail.users().messages().list(
             userId='me', 
-            q=query
+            q=query,
+            maxResults=5
         ).execute()
         
         messages = results.get('messages', [])
@@ -340,6 +373,9 @@ async def scan_and_upload_attachments():
             else:
                 print(f"  No email body text found")
             
+            # Track whether we handled this email in any way (processed/duplicate/no-usable-attachment)
+            handled_or_reviewed = False
+
             # Check for attachments
             if 'payload' in msg and 'parts' in msg['payload']:
                 for part in msg['payload']['parts']:
@@ -371,6 +407,17 @@ async def scan_and_upload_attachments():
                                 )
                                 
                                 if is_duplicate:
+                                    # Mark email as read so we don't re-scan duplicates forever
+                                    try:
+                                        service_gmail.users().messages().modify(
+                                            userId='me',
+                                            id=message['id'],
+                                            body={'removeLabelIds': ['UNREAD']}
+                                        ).execute()
+                                        print(f"    -> Marked email as read (duplicate: {invoice_reference})")
+                                    except Exception:
+                                        pass
+                                    handled_or_reviewed = True
                                     print(f"    -> Duplicate bill detected (Invoice Ref: {invoice_reference}). Skipping...")
                                     continue
                                 
@@ -421,10 +468,36 @@ async def scan_and_upload_attachments():
                                     body={'removeLabelIds': ['UNREAD']}
                                 ).execute()
                                 print(f"    -> Marked email as read")
+                                handled_or_reviewed = True
                                 
                             except Exception as e:
                                 print(f"    ERROR: Failed to process {filename}: {str(e)}")
-        
+                        else:
+                            # Non-PDF or missing attachment id; consider reviewed
+                            handled_or_reviewed = True
+            else:
+                # No parts/attachments; consider reviewed
+                handled_or_reviewed = True
+
+            # If we reviewed the email but didn't upload anything (e.g., no PDF, duplicate, or non-usable parts),
+            # mark as read so it doesn't reappear every cycle.
+            try:
+                if handled_or_reviewed:
+                    service_gmail.users().messages().modify(
+                        userId='me',
+                        id=message['id'],
+                        body={'removeLabelIds': ['UNREAD']}
+                    ).execute()
+                    print(f"    -> Marked email as read (no new uploads)")
+            except Exception:
+                pass
+
+            # Yield a tiny bit between messages to avoid tight loops
+            try:
+                await asyncio.sleep(0.1)
+            except Exception:
+                pass
+
         print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Summary: Uploaded {uploaded_count} new PDF(s) to Google Drive")
         return uploaded_count
         

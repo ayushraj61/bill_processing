@@ -510,8 +510,7 @@
                 }).then(r => r.json()).then(d => {
                     populateDataTable(d);
                 }).catch(() => {
-                    const fb = [{ "supplier_name": row.dataset.supplier, "file_name": row.dataset.filename, "upload_date": row.dataset.uploadDate, "invoice_date": row.dataset.invoiceDate, "gross_amount": row.dataset.gross }];
-                    populateDataTable(fb);
+                    populateDataTable([{ "Status": "Failed to load extracted data. Please try again." }]);
                 });
             } catch (e) {
                 try { console.error('Fallback openPreview error:', e); } catch(_e){}
@@ -659,6 +658,10 @@
         let objectifyModeData = null; // Store objectified data
         const totalDataCache = {}; // Cache per bill.id for Total mode
         let lastProcessedCount = 0; // Track how many files have been processed
+        // Polling/abort management
+        let pollingIntervalId = null;
+        let processingController = null;
+        let billsController = null;
 
         // --- DOM ELEMENTS ---
         const modal = document.getElementById('previewModal');
@@ -677,7 +680,10 @@
         // --- REAL-TIME BILL UPDATES ---
         async function fetchAndUpdateBills() {
             try {
-                const response = await fetch('/get-all-pending-bills');
+                // Abort any previous in-flight request
+                if (billsController) { try { billsController.abort(); } catch(_){} }
+                billsController = new AbortController();
+                const response = await fetch('/get-all-pending-bills', { signal: billsController.signal });
                 const allPendingBills = await response.json();
                 
                 console.log(`[DEBUG] Fetched ${allPendingBills.length} pending bills from database`);
@@ -717,7 +723,10 @@
         // --- AUTO-REFRESH FOR BACKGROUND PROCESSING ---
         async function checkBackgroundProcessing() {
             try {
-                const response = await fetch('/processing-status');
+                // Abort any previous in-flight status request
+                if (processingController) { try { processingController.abort(); } catch(_){} }
+                processingController = new AbortController();
+                const response = await fetch('/processing-status', { signal: processingController.signal });
                 const status = await response.json();
                 
                 const banner = document.getElementById('processingBanner');
@@ -764,12 +773,20 @@
                 
                 lastProcessedCount = status.processed_count;
             } catch (error) {
-                console.error('Error checking processing status:', error);
+                // Ignore intentional aborts from AbortController during user actions
+                if (error && error.name === 'AbortError') return;
+                try { console.error('Error checking processing status:', error); } catch(_){}
             }
         }
         
         // Check every 3 seconds for new bills (more frequent for real-time feel)
-        setInterval(checkBackgroundProcessing, 3000);
+        pollingIntervalId = setInterval(checkBackgroundProcessing, 3000);
+
+        function stopAllPolling() {
+            if (pollingIntervalId) { clearInterval(pollingIntervalId); pollingIntervalId = null; }
+            if (processingController) { try { processingController.abort(); } catch(_){} processingController = null; }
+            if (billsController) { try { billsController.abort(); } catch(_){} billsController = null; }
+        }
         
         // --- EVENT LISTENERS ---
         window.onload = function() {
@@ -1081,23 +1098,28 @@
 
             // Otherwise fetch from server and cache it
             populateDataTable([{"Status": "Extracting data, please wait..."}]);
-            try {
-                const response = await fetch('/get-extracted-data', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ file_id: bill.id })
-                });
-                const extractedData = await response.json();
-                totalModeData = extractedData; // Store total mode data
-                totalDataCache[bill.id] = extractedData; // Cache for next time
-                populateDataTable(extractedData);
-            } catch (error) {
-                const fallbackData = [
-                    { "supplier_name": bill.supplier_name || bill.supplier, "file_name": bill.filename, "upload_date": (bill.upload_date || '').split('T')[0], "invoice_date": bill.invoice_date, "gross_amount": bill.gross_amount || bill.amount }
-                ];
-                totalModeData = fallbackData;
-                totalDataCache[bill.id] = fallbackData;
-                populateDataTable(fallbackData);
+            // Retry up to 1 time; no dashboard-column fallback
+            let fetched = false;
+            for (let attempt = 0; attempt < 2 && !fetched; attempt++) {
+                try {
+                    const response = await fetch('/get-extracted-data', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ file_id: bill.id })
+                    });
+                    const extractedData = await response.json();
+                    totalModeData = extractedData;
+                    totalDataCache[bill.id] = extractedData;
+                    populateDataTable(extractedData);
+                    fetched = true;
+                } catch (error) {
+                    if (attempt === 0) {
+                        populateDataTable([{ "Status": "Retrying to load extracted data..." }]);
+                        await new Promise(res => setTimeout(res, 1000));
+                    } else {
+                        populateDataTable([{ "Status": "Failed to load extracted data. Please try again." }]);
+                    }
+                }
             }
         }
 
@@ -1468,13 +1490,25 @@
         async function logout() {
             if (confirm('Are you sure you want to logout?')) {
                 try {
-                    await fetch('/logout', { method: 'POST' });
+                    // Stop polling and abort in-flight requests immediately for instant UX
+                    stopAllPolling();
+                    // Proactively clear session cookie (server will also invalidate)
+                    try { document.cookie = 'session_token=; Max-Age=0; path=/'; } catch(_){}
+                    // Fire-and-forget logout; don’t block navigation on slow network/DB
+                    fetch('/logout', { method: 'POST', credentials: 'include' }).catch(() => {});
+                    // Navigate right away
                     window.location.href = '/login';
                 } catch (error) {
                     window.location.href = '/login';
                 }
             }
         }
+
+        // Also stop polling when page is hidden or unloading
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) stopAllPolling();
+        });
+        window.addEventListener('beforeunload', stopAllPolling);
     </script>
 </body>
 </html>
