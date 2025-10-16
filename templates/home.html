@@ -524,10 +524,26 @@
         <div class="card">
             <h2>Pending Bills</h2>
             <div style="display:flex; gap:10px; align-items:center; margin-top:10px;">
+                <select id="uploadCompany" class="filter-input" style="max-width:150px;" required>
+                    <option value="">Select Company</option>
+                </select>
                 <input id="uploadSupplier" type="text" placeholder="Supplier (optional)" class="filter-input" style="max-width:220px;">
                 <input id="uploadFile" type="file" accept="application/pdf" multiple>
                 <button id="uploadBtn" class="button-primary">Upload PDF</button>
                 <span id="uploadMsg" style="font-size:12px; color:#555;"></span>
+            </div>
+            
+            <!-- Pagination Controls -->
+            <div style="display:flex; justify-content:space-between; align-items:center; margin:15px 0; padding:10px; background:#f8f9fa; border-radius:6px;">
+                <div style="display:flex; align-items:center; gap:10px;">
+                    <label for="pageSize" style="font-size:14px; font-weight:500;">Rows per page:</label>
+                    <select id="pageSize" style="padding:6px 10px; border:1px solid #d6e0f5; border-radius:4px; background:white;">
+                        <option value="25">25</option>
+                        <option value="50" selected>50</option>
+                        <option value="100">100</option>
+                    </select>
+                </div>
+                <div id="paginationInfo" style="font-size:14px; color:#666;">Showing 0-0 of 0 bills</div>
             </div>
             <table class="status-table">
                 <thead>
@@ -601,6 +617,13 @@
                     {% endfor %}
                 </tbody>
             </table>
+            
+            <!-- Pagination Navigation -->
+            <div id="paginationNav" style="display:flex; justify-content:center; align-items:center; gap:8px; margin-top:20px; padding:15px;">
+                <button id="prevPage" class="button-secondary" disabled>Previous</button>
+                <div id="pageNumbers" style="display:flex; gap:4px;"></div>
+                <button id="nextPage" class="button-secondary" disabled>Next</button>
+            </div>
         </div>
     </div>
 
@@ -647,6 +670,7 @@
     
     <script>
         const ALL_BILLS = {{ bills|tojson|safe }};
+        const COMPANY_NAMES = {{ company_names|tojson|safe }};
     </script>
     <script>
         // --- GLOBAL STATE ---
@@ -657,11 +681,21 @@
         let totalModeData = null; // Store original total mode data
         let objectifyModeData = null; // Store objectified data
         const totalDataCache = {}; // Cache per bill.id for Total mode
+        const prefetchCache = {};  // Cache prefetched bill data (Phase 4)
         let lastProcessedCount = 0; // Track how many files have been processed
+        
+        // --- PAGINATION STATE ---
+        let currentPage = 1;
+        let pageSize = 50;
+        let filteredBills = []; // Bills after filtering
+        let filtersActive = false; // When true, render uses filteredBills (also true for sort-only)
         // Polling/abort management
         let pollingIntervalId = null;
         let processingController = null;
         let billsController = null;
+        
+        // --- ITEMIZE STATE (Phase 3) ---
+        const itemizeInProgress = new Set();  // Track which files are being itemized
 
         // --- DOM ELEMENTS ---
         const modal = document.getElementById('previewModal');
@@ -675,6 +709,7 @@
         const uploadBtn = document.getElementById('uploadBtn');
         const uploadFile = document.getElementById('uploadFile');
         const uploadSupplier = document.getElementById('uploadSupplier');
+        const uploadCompany = document.getElementById('uploadCompany');
         const uploadMsg = document.getElementById('uploadMsg');
 
         // --- REAL-TIME BILL UPDATES ---
@@ -689,7 +724,17 @@
                 console.log(`[DEBUG] Fetched ${allPendingBills.length} pending bills from database`);
                 console.log(`[DEBUG] Current dashboard has ${allBills.length} bills`);
                 
-                if (!allPendingBills || allPendingBills.length === 0) return;
+                if (!allPendingBills || allPendingBills.length === 0) {
+                    // No new data; keep current page stable
+                    return;
+                }
+
+                // If dashboard is empty (e.g., after upload flow), hydrate fully from server
+                if (allBills.length === 0 && allPendingBills.length > 0) {
+                    allBills = allPendingBills;
+                    renderTable();
+                    return;
+                }
                 
                 // Get current bill IDs
                 const currentIds = new Set(allBills.map(b => b.id));
@@ -790,6 +835,8 @@
         
         // --- EVENT LISTENERS ---
         window.onload = function() {
+            // Initialize filtered list from allBills so paging has data immediately
+            try { filteredBills = Array.isArray(allBills) ? allBills.slice() : []; } catch(_) { filteredBills = []; }
             renderTable();
             prevBtn.addEventListener('click', () => displayBillInModal(currentFileIndex - 1));
             approveBtn.addEventListener('click', approveAndGoToNext);
@@ -815,30 +862,59 @@
                 }
             });
 
+            // Populate company dropdown with user's accessible companies
+            function populateCompanyDropdown() {
+                try {
+                    const companies = Array.isArray(COMPANY_NAMES) ? COMPANY_NAMES : [];
+                    // Clear existing options except the first one
+                    uploadCompany.innerHTML = '<option value="">Select Company</option>';
+                    // Add company options
+                    companies.forEach(company => {
+                        const option = document.createElement('option');
+                        option.value = company;
+                        option.textContent = company;
+                        uploadCompany.appendChild(option);
+                    });
+                    // If only one company, auto-select it
+                    if (companies.length === 1) {
+                        uploadCompany.value = companies[0];
+                    }
+                } catch (error) {
+                    console.error('Error loading company options:', error);
+                }
+            }
+            
+            // Load company options on page load
+            populateCompanyDropdown();
+
             // Upload handler (isolated, does not change existing event handlers)
             if (uploadBtn) {
                 uploadBtn.addEventListener('click', async () => {
                     const files = uploadFile.files ? Array.from(uploadFile.files) : [];
                     if (!files.length) { uploadMsg.textContent = 'Select one or more PDFs first.'; return; }
+                    
+                    const selectedCompany = uploadCompany.value;
+                    if (!selectedCompany) { uploadMsg.textContent = 'Please select a company first.'; return; }
+                    
                     uploadBtn.disabled = true; uploadMsg.textContent = `Uploading 0/${files.length}...`;
                     const sup = (uploadSupplier.value || '').trim();
-                    const newlyAdded = [];
+                    let successCount = 0;
                     try {
                         for (let i = 0; i < files.length; i++) {
                             const f = files[i];
                             const form = new FormData();
                             form.append('file', f);
+                            form.append('company_name', selectedCompany);
                             if (sup) form.append('supplier', sup);
                             const resp = await fetch('/upload-bill', { method: 'POST', body: form });
                             if (!resp.ok) throw new Error('Upload failed');
-                            const bill = await resp.json();
-                            newlyAdded.push(bill);
+                            await resp.json(); // response contains success message; ignore details
+                            successCount++;
                             uploadMsg.textContent = `Uploading ${i+1}/${files.length}...`;
                         }
-                        // Prepend all new bills and re-render once
-                        allBills = newlyAdded.concat(allBills);
-                        renderTable();
-                        uploadMsg.textContent = `Uploaded & extracted ${newlyAdded.length} file(s).`;
+                        // Refresh from server to avoid inconsistent in-memory state
+                        await fetchAndUpdateBills();
+                        uploadMsg.textContent = `Uploaded ${successCount} file(s). Background processing will start shortly...`;
                         uploadFile.value = '';
                     } catch (e) {
                         uploadMsg.textContent = 'Upload failed.';
@@ -849,6 +925,101 @@
             }
         };
 
+        // Previous working pagination helpers
+        function updatePaginationInfo(start, end, total) {
+            const el = document.getElementById('paginationInfo');
+            if (el) el.textContent = `Showing ${start}-${end} of ${total} bills`;
+        }
+        function updatePaginationNavigation(totalPages) {
+            const prevBtn = document.getElementById('prevPage');
+            const nextBtn = document.getElementById('nextPage');
+            const pageNumbers = document.getElementById('pageNumbers');
+            if (!prevBtn || !nextBtn || !pageNumbers) return;
+            prevBtn.disabled = currentPage <= 1;
+            nextBtn.disabled = currentPage >= totalPages;
+            pageNumbers.innerHTML = '';
+            const maxVisiblePages = 5;
+            let startPage = Math.max(1, currentPage - Math.floor(maxVisiblePages / 2));
+            let endPage = Math.min(totalPages, startPage + maxVisiblePages - 1);
+            if (endPage - startPage + 1 < maxVisiblePages) {
+                startPage = Math.max(1, endPage - maxVisiblePages + 1);
+            }
+            for (let i = startPage; i <= endPage; i++) {
+                const pageBtn = document.createElement('button');
+                pageBtn.textContent = i;
+                pageBtn.className = i === currentPage ? 'button-primary' : 'button-secondary';
+                pageBtn.style.padding = '6px 12px';
+                pageBtn.style.margin = '0 2px';
+                pageBtn.onclick = () => goToPage(i);
+                pageNumbers.appendChild(pageBtn);
+            }
+        }
+
+        // Paging actions (global)
+        function goToPage(page) {
+            const active = filtersActive ? filteredBills : allBills;
+            const totalPages = Math.ceil((active.length || 0) / pageSize) || 1;
+            if (page < 1 || page > totalPages) return;
+            currentPage = page;
+            renderTable();
+        }
+
+        function changePageSize(newSize) {
+            pageSize = parseInt(newSize || '50', 10);
+            if (!Number.isFinite(pageSize) || pageSize <= 0) pageSize = 50;
+            currentPage = 1;
+            renderTable();
+        }
+
+        // Hook up pagination controls
+        (function attachPaginationListeners(){
+            const sizeSel = document.getElementById('pageSize');
+            const prev = document.getElementById('prevPage');
+            const next = document.getElementById('nextPage');
+            if (sizeSel) sizeSel.addEventListener('change', (e)=>{ changePageSize(e.target.value); });
+            if (prev) prev.addEventListener('click', ()=>{ if (currentPage>1){ currentPage--; renderTable(); }});
+            if (next) next.addEventListener('click', ()=>{ const totalPages = Math.ceil((allBills.length||0)/pageSize)||1; if (currentPage<totalPages){ currentPage++; renderTable(); }});
+        })();
+
+        function renderTable() {
+            const tbody = document.getElementById('billList');
+            const active = filtersActive ? filteredBills : allBills;
+            if (!active || active.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6">No pending bills found.</td></tr>';
+                updatePaginationInfo(0, 0, 0);
+                updatePaginationNavigation(1);
+                return;
+            }
+            const totalBills = active.length;
+            const totalPages = Math.max(1, Math.ceil(totalBills / pageSize));
+            if (currentPage > totalPages) currentPage = totalPages;
+            const startIndex = (currentPage - 1) * pageSize;
+            const endIndex = Math.min(startIndex + pageSize, totalBills);
+            const pageSlice = active.slice(startIndex, endIndex);
+            updatePaginationInfo(pageSlice.length === 0 ? 0 : startIndex + 1, endIndex, totalBills);
+            updatePaginationNavigation(totalPages);
+            tbody.innerHTML = '';
+            for (const bill of pageSlice) {
+                const row = document.createElement('tr');
+                row.dataset.fileId = bill.id;
+                row.dataset.filename = bill.filename;
+                row.dataset.supplier = bill.supplier_name || bill.supplier || '';
+                row.dataset.invoiceDate = bill.invoice_date || '';
+                row.dataset.uploadDate = (bill.upload_date || '').split('T')[0];
+                row.dataset.gross = bill.gross_amount || bill.amount || '';
+                row.dataset.webview = bill.webViewLink || '';
+                row.innerHTML = `
+                    <td>${bill.supplier_name || bill.supplier || ''}</td>
+                    <td>${bill.invoice_date || ''}</td>
+                    <td>${(bill.upload_date || '').split('T')[0]}</td>
+                    <td class="filename-cell"><span>${bill.filename}</span><span class="tooltip">${bill.filename}</span></td>
+                    <td>${bill.gross_amount ? '£' + bill.gross_amount : (bill.amount || '')}</td>
+                    <td><button class="status-button ${bill.status === 'Approved' ? 'status-approved' : 'status-pending'}">${bill.status || 'Pending'}</button></td>
+                `;
+                row.onclick = () => openPreview(allBills.indexOf(bill));
+                tbody.appendChild(row);
+            }
+        }
         // --- CORE FUNCTIONS ---
         function handleOverlayClick(event) {
             // Close modal when clicking on the overlay (dark background)
@@ -857,57 +1028,15 @@
             }
         }
 
-        function renderTable(highlightNew = false) {
-            // If no data available from JS, keep server-rendered rows intact
-            if (!allBills || allBills.length === 0) return;
-            const tableBody = document.getElementById('billList');
-            
-            // Get existing row IDs to detect which are new
-            const existingIds = new Set(
-                Array.from(tableBody.querySelectorAll('tr')).map(row => row.dataset.fileId)
-            );
-            
-            tableBody.innerHTML = '';
-            allBills.forEach((bill, index) => {
-                const row = document.createElement('tr');
-                // Add onclick to the row
-                row.onclick = () => openPreview(index);
-                row.style.cursor = 'pointer';
-                row.dataset.fileId = bill.id;
-                row.dataset.filename = bill.filename;
-                row.dataset.supplier = bill.supplier_name || bill.supplier || '';
-                row.dataset.invoiceDate = bill.invoice_date || '';
-                row.dataset.uploadDate = (bill.upload_date || '').split('T')[0];
-                row.dataset.gross = bill.gross_amount || bill.amount || '';
-                row.dataset.webview = bill.webViewLink || '';
-                
-                // Highlight if this is a newly added bill
-                if (highlightNew && !existingIds.has(bill.id)) {
-                    row.classList.add('new-bill-row');
-                }
-                
-                const statusHtml = `<button class="status-button ${bill.status === 'Approved' ? 'status-approved' : 'status-pending'}">${bill.status}</button>`;
-                row.innerHTML = `
-                    <td>${bill.supplier_name || bill.supplier}</td>
-                    <td>${bill.invoice_date}</td>
-                    <td>${(bill.upload_date || '').split('T')[0]}</td>
-                    <td class="filename-cell">
-                        <span>${bill.filename}</span>
-                        <span class="tooltip">${bill.filename}</span>
-                    </td>
-                    <td>${bill.gross_amount ? '£' + bill.gross_amount : bill.amount}</td>
-                    <td>${statusHtml}</td>
-                `;
-                tableBody.appendChild(row);
-            });
-        }
+        
 
         function openPreview(index) {
             try { console.log('openPreview called with index:', index); } catch (_e) {}
             // Reset mode to Total when opening a new bill
             isObjectifyMode = false;
-            totalModeData = null;
-            objectifyModeData = null;
+            // Don't reset cache - use persistent cache instead
+            // totalModeData = null;
+            // objectifyModeData = null;
             updateModeUI();
             
             try {
@@ -928,7 +1057,13 @@
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ file_id: row.dataset.fileId })
                 }).then(r => r.json()).then(d => {
-                    totalModeData = d; populateDataTable(d);
+                    totalModeData = d; 
+                    // Cache total data
+                    if (bill) {
+                        if (!totalDataCache[bill.id]) totalDataCache[bill.id] = {};
+                        totalDataCache[bill.id].total = d;
+                    }
+                    populateDataTable(d);
                 }).catch(() => {
                     const fb = [{ "supplier_name": row.dataset.supplier, "file_name": row.dataset.filename, "upload_date": row.dataset.uploadDate, "invoice_date": row.dataset.invoiceDate, "gross_amount": row.dataset.gross }];
                     totalModeData = fb; populateDataTable(fb);
@@ -948,20 +1083,27 @@
 
         function closePreview() {
             modal.classList.remove('visible');
-            // Reset mode when closing
+            // Reset mode when closing but keep cache for next time
             isObjectifyMode = false;
-            totalModeData = null;
-            objectifyModeData = null;
+            // Don't reset cache - keep itemized data for next time
+            // totalModeData = null;
+            // objectifyModeData = null;
         }
 
         function toggleObjectifyMode() {
             isObjectifyMode = !isObjectifyMode;
             updateModeUI();
             
+            const bill = allBills[currentFileIndex];
+            if (!bill) return;
+            
             if (isObjectifyMode) {
                 // Switch to Objectify mode
                 if (objectifyModeData) {
                     populateDataTable(objectifyModeData);
+                } else if (totalDataCache[bill.id] && totalDataCache[bill.id].objectified) {
+                    // Use cached itemized data
+                    populateDataTable(totalDataCache[bill.id].objectified);
                 } else {
                     // Request objectified data from server
                     fetchObjectifiedData();
@@ -970,13 +1112,19 @@
                 // Switch back to Total mode
                 if (totalModeData) {
                     populateDataTable(totalModeData);
+                } else if (totalDataCache[bill.id] && totalDataCache[bill.id].total) {
+                    // Use cached total data
+                    populateDataTable(totalDataCache[bill.id].total);
                 }
             }
         }
 
         function updateModeUI() {
             if (isObjectifyMode) {
-                objectifyBtn.textContent = 'Consolidate';
+                // Don't change button text if itemization is in progress
+                if (!itemizeInProgress.has(allBills[currentFileIndex]?.id)) {
+                    objectifyBtn.textContent = 'Consolidate';
+                }
                 objectifyBtn.classList.add('objectify-active');
                 modeIndicator.textContent = 'Itemize';
                 modeIndicator.classList.remove('total-mode');
@@ -994,9 +1142,24 @@
             const bill = allBills[currentFileIndex];
             if (!bill) return;
             
+            // 🚀 PHASE 3: Prevent double-click itemize
+            if (itemizeInProgress.has(bill.id)) {
+                alert('Itemization already in progress for this file. Please wait...');
+                return;
+            }
+            
+            // Mark as in progress
+            itemizeInProgress.add(bill.id);
+            objectifyBtn.disabled = true;
+            objectifyBtn.textContent = 'Processing...';
+            objectifyBtn.style.opacity = '0.6';
+            
             populateDataTable([{"Status": "Itemizing data, please wait..."}]);
             
             try {
+                // 🚀 NO TIMEOUT - LLM must process ALL items regardless of count
+                const startTime = Date.now();
+                
                 const response = await fetch('/get-objectified-data', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -1006,19 +1169,78 @@
                     })
                 });
                 
-                if (response.ok) {
-                    objectifyModeData = await response.json();
-                    populateDataTable(objectifyModeData);
+                const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+                console.log(`✅ Itemize completed in ${elapsed}s`);
+                
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({}));
+                    if (response.status === 202) {
+                        // Already processing
+                        alert(errorData.message || 'Itemization already in progress');
+                    } else {
+                        throw new Error(errorData.error || 'Itemization failed');
+                    }
+                    return;
+                }
+                
+                const data = await response.json();
+                
+                if (data.error) {
+                    alert(data.error);
+                    return;
+                }
+                
+                // Success! Use itemized data
+                objectifyModeData = data;
+                // Cache objectified data
+                if (bill) {
+                    if (!totalDataCache[bill.id]) totalDataCache[bill.id] = {};
+                    totalDataCache[bill.id].objectified = data;
+                }
+                populateDataTable(objectifyModeData);
+                
+            } catch (error) {
+                alert('Itemization failed: ' + error.message);
+                console.error('Itemize error:', error);
+            } finally {
+                // Cleanup
+                itemizeInProgress.delete(bill.id);
+                objectifyBtn.disabled = false;
+                objectifyBtn.style.opacity = '1';
+                // Restore correct button text based on mode
+                if (isObjectifyMode) {
+                    objectifyBtn.textContent = 'Consolidate';
                 } else {
-                    // If endpoint doesn't exist, create mock objectified data
-                    objectifyModeData = createMockObjectifiedData(totalModeData);
-                    populateDataTable(objectifyModeData);
+                    objectifyBtn.textContent = 'Itemize';
+                }
+            }
+        }
+
+        // 🚀 PHASE 4: Prefetch next bill data for instant transitions
+        async function prefetchBillData(index) {
+            if (index < 0 || index >= allBills.length) return;
+            
+            const bill = allBills[index];
+            if (!bill || !bill.id) return;
+            
+            // Check if already cached
+            if (totalDataCache[bill.id] || prefetchCache[bill.id]) return;
+            
+            try {
+                const response = await fetch('/get-extracted-data', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ file_id: bill.id })
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    prefetchCache[bill.id] = data;
+                    console.log(`✅ Prefetched bill ${index + 1}: ${bill.filename}`);
                 }
             } catch (error) {
-                console.error('Error fetching objectified data:', error);
-                // Fallback to mock data
-                objectifyModeData = createMockObjectifiedData(totalModeData);
-                populateDataTable(objectifyModeData);
+                // Silently fail - prefetch is optional
+                console.log(`Prefetch failed for bill ${index + 1}:`, error);
             }
         }
 
@@ -1089,10 +1311,19 @@
             approveBtn.disabled = (bill.status === 'Approved');
             approveBtn.textContent = (bill.status === 'Approved') ? 'Approved' : 'Approve & Next';
 
-            // If we already have cached total-mode data for this bill, render immediately and skip fetch
-            if (!isObjectifyMode && totalDataCache[bill.id]) {
-                totalModeData = totalDataCache[bill.id];
+            // 🚀 PHASE 4: Check prefetch cache first, then regular cache
+            let extractedData = prefetchCache[bill.id] || totalDataCache[bill.id];
+            
+            if (!isObjectifyMode && extractedData) {
+                totalModeData = extractedData;
+                totalDataCache[bill.id] = extractedData; // Move from prefetch to main cache
+                delete prefetchCache[bill.id];
                 populateDataTable(totalModeData);
+                
+                // Prefetch NEXT bill in background
+                if (index + 1 < allBills.length) {
+                    setTimeout(() => prefetchBillData(index + 1), 500);  // Small delay
+                }
                 return;
             }
 
@@ -1112,6 +1343,11 @@
                     totalDataCache[bill.id] = extractedData;
                     populateDataTable(extractedData);
                     fetched = true;
+                    
+                    // 🚀 PHASE 4: Prefetch NEXT bill after successful fetch
+                    if (index + 1 < allBills.length) {
+                        setTimeout(() => prefetchBillData(index + 1), 500);
+                    }
                 } catch (error) {
                     if (attempt === 0) {
                         populateDataTable([{ "Status": "Retrying to load extracted data..." }]);
@@ -1235,7 +1471,8 @@
 
         function initializeFilters() {
             const tableBody = document.getElementById('billList');
-            const filterInputs = document.querySelectorAll('.filter-input');
+            // Only bind to the table's filter row inputs (avoid top upload controls)
+            const filterInputs = document.querySelectorAll('.filter-row .filter-input');
             const sortableHeaders = document.querySelectorAll('.sortable');
 
             // Store original rows
@@ -1302,10 +1539,7 @@
             const clearBtn = dropdownFilter.querySelector('.dropdown-clear');
 
             // Get unique supplier names
-            const supplierNames = [...new Set(originalRows.map(row => {
-                const cells = row.querySelectorAll('td');
-                return cells.length > 0 ? cells[0].textContent.trim() : '';
-            }))].filter(name => name);
+            const supplierNames = [...new Set((allBills || []).map(b => (b.supplier_name || b.supplier || '').trim()))].filter(name => name);
 
             // Populate dropdown options
             function populateOptions(searchTerm = '') {
@@ -1392,8 +1626,8 @@
         }
 
         function applyFiltersAndSort() {
-            const tableBody = document.getElementById('billList');
-            const filterInputs = document.querySelectorAll('.filter-input');
+            // Only read inputs from the table's filter row
+            const filterInputs = document.querySelectorAll('.filter-row .filter-input');
             const dropdownFilter = document.querySelector('.dropdown-filter');
 
             // Get supplier filter
@@ -1413,13 +1647,18 @@
                 }
             });
 
-            // Filter rows
-            let filteredRows = originalRows.filter(row => {
-                const cells = row.querySelectorAll('td');
+            // Helper: detect if any filter is actually active
+            function anyFilterActive() {
+                const anyText = Array.from(filterInputs).some(input => (input.value || '').trim().length > 0);
+                const anySupplier = dropdownFilter && dropdownFilter.querySelectorAll('input[type="checkbox"]:checked').length > 0;
+                return anyText || anySupplier;
+            }
 
+            // Filter bills from allBills array
+            const result = allBills.filter(bill => {
                 // Check supplier filter (column 0)
                 if (selectedSuppliers.length > 0) {
-                    const supplierName = cells[0] ? cells[0].textContent.trim() : '';
+                    const supplierName = (bill.supplier_name || bill.supplier || '').trim();
                     if (!selectedSuppliers.includes(supplierName)) {
                         return false;
                     }
@@ -1428,39 +1667,71 @@
                 // Check other column filters
                 for (const [columnIndex, filterValue] of Object.entries(columnFilters)) {
                     const colIndex = parseInt(columnIndex);
-                    if (cells.length > colIndex) {
-                        const cellText = cells[colIndex].textContent.toLowerCase().trim();
-                        if (!cellText.includes(filterValue)) {
-                            return false;
-                        }
+                    let cellText = '';
+                    
+                    switch(colIndex) {
+                        case 0: cellText = (bill.supplier_name || bill.supplier || '').toLowerCase(); break;
+                        case 1: cellText = (bill.invoice_date || '').toLowerCase(); break;
+                        case 2: cellText = ((bill.upload_date || '').split('T')[0]).toLowerCase(); break;
+                        case 3: cellText = (bill.filename || '').toLowerCase(); break;
+                        case 4: cellText = (bill.gross_amount || bill.amount || '').toLowerCase(); break;
+                        case 5: cellText = (bill.status || '').toLowerCase(); break;
+                    }
+                    
+                    if (!cellText.includes(filterValue)) {
+                        return false;
                     }
                 }
 
                 return true;
             });
 
-            // Sort rows if needed
-            if (currentSort.direction !== 'none') {
-                filteredRows.sort((a, b) => {
-                    const cellsA = a.querySelectorAll('td');
-                    const cellsB = b.querySelectorAll('td');
+            // If no filters are active, base list is all bills (sorting may still apply)
+            const baseList = anyFilterActive() ? result : allBills.slice();
 
-                    if (cellsA.length <= currentSort.column || cellsB.length <= currentSort.column) {
-                        return 0;
+            // Sort bills if needed
+            if (currentSort.direction !== 'none') {
+                baseList.sort((a, b) => {
+                    let valueA, valueB;
+                    
+                    switch(currentSort.column) {
+                        case 0: 
+                            valueA = (a.supplier_name || a.supplier || '').trim();
+                            valueB = (b.supplier_name || b.supplier || '').trim();
+                            break;
+                        case 1:
+                            valueA = a.invoice_date || '';
+                            valueB = b.invoice_date || '';
+                            break;
+                        case 2:
+                            valueA = (a.upload_date || '').split('T')[0];
+                            valueB = (b.upload_date || '').split('T')[0];
+                            break;
+                        case 3:
+                            valueA = a.filename || '';
+                            valueB = b.filename || '';
+                            break;
+                        case 4:
+                            valueA = (a.gross_amount || a.amount || '').toString();
+                            valueB = (b.gross_amount || b.amount || '').toString();
+                            break;
+                        case 5:
+                            valueA = a.status || '';
+                            valueB = b.status || '';
+                            break;
+                        default:
+                            return 0;
                     }
 
-                    const valueA = cellsA[currentSort.column].textContent.trim();
-                    const valueB = cellsB[currentSort.column].textContent.trim();
-
                     // Handle numeric sorting for amounts
-                    if (currentSort.column === 4) { // Gross Amount column
+                    if (currentSort.column === 4) {
                         const numA = parseFloat(valueA.replace(/[^0-9.\-]/g, '')) || 0;
                         const numB = parseFloat(valueB.replace(/[^0-9.\-]/g, '')) || 0;
                         return currentSort.direction === 'asc' ? numA - numB : numB - numA;
                     }
 
                     // Handle date sorting
-                    if (currentSort.column === 1 || currentSort.column === 2) { // Date columns
+                    if (currentSort.column === 1 || currentSort.column === 2) {
                         const dateA = new Date(valueA);
                         const dateB = new Date(valueB);
                         if (!isNaN(dateA.getTime()) && !isNaN(dateB.getTime())) {
@@ -1474,16 +1745,20 @@
                 });
             }
 
-            // Update table
-            tableBody.innerHTML = '';
-            filteredRows.forEach(row => {
-                tableBody.appendChild(row.cloneNode(true));
-            });
+            // Update globals and re-render from page 1
+            filteredBills = baseList;
+            filtersActive = anyFilterActive() || currentSort.direction !== 'none';
+            currentPage = 1;
+            renderTable();
         }
 
         // Initialize filters when page loads (after server rows exist)
         document.addEventListener('DOMContentLoaded', function() {
-            try { initializeFilters(); } catch (_e) {}
+            try { 
+                initializeFilters();
+                // Initialize pagination (new system already wired above)
+                renderTable();
+            } catch (_e) {}
         });
         
         // Logout function
